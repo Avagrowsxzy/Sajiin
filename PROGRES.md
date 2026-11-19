@@ -5,8 +5,8 @@
 - Backend REST, MySQL, repository/service/controller layering.
 - Login, refresh token, MFA, lockout, rate limit, RBAC tiga role.
 - Password hashing (`scrypt`), token signing (`HMAC-SHA256`), dan TOTP sudah memakai Node `node:crypto` native.
-- Hash akun `admin` berhasil dimigrasikan dari Argon2 lama ke format `scrypt` native dan password di-update ke `Admin@SecurePass2024!` (15 karakter, kombinasi lengkap).
-- Hash akun `kasir` di-reset ke `scrypt` native dengan password `Kasir@SecurePass2024!` (15 karakter, kombinasi lengkap).
+- Hash akun `admin` berhasil dimigrasikan dari Argon2 lama ke format `scrypt` native dan password development dirotasi sesuai kebijakan kompleksitas.
+- Hash akun `kasir` di-reset ke `scrypt` native dengan password development baru sesuai kebijakan kompleksitas.
 - MFA semua role memakai PIN keamanan 6 digit setelah password; PIN di-hash scrypt native dan tidak bergantung aplikasi authenticator.
 - Halaman katalog `/menu` dikunci ke `ProtectedRoute` role `user`; akses langsung tanpa login tidak lagi bisa dibypass lewat URL.
 - Link Menu pada navbar pengunjung diarahkan ke `/login`, sedangkan user terautentikasi tetap memakai katalog dan bottom navigation.
@@ -47,7 +47,7 @@
 - Migrasi `012_security_policy_and_recovery.sql` menambahkan `security_answers_hash` (hash `scrypt` dari 3 jawaban pertanyaan keamanan tetap) tanpa menyimpan teks pertanyaan di database.
 - Alur Lupa Password (`/auth/password/forgot/check` & `/auth/password/forgot/reset`): wajib memiliki PIN aktif (jika belum aktif, akun dinyatakan hilang/`ACCOUNT_LOST_NO_PIN`), dan jika lupa PIN dapat memulihkan menggunakan 3 pertanyaan keamanan tetap.
 - Indikator Parameter Password (`PasswordStrengthMeter`: Lemah, Sedang, Kuat) dipasang pada form ganti password mandiri (`ProfilePage.tsx`) dan form reset lupa password (`AuthModal.tsx`).
-- Eliminasi password default statis (`Sajiin123!`): pembuatan akun pelanggan oleh Kasir (`KasirCustomersPage.tsx`) dan Admin (`AdminUsersPage.tsx`) kini menggunakan generator password sementara ramah manusia di server (`generateHumanFriendlyPassword`: pola kata + 2 angka + simbol, misal `Sajiin48!`) yang memenuhi kebijakan password 8+ karakter. Password sementara ditampilkan jelas di layar kasir/admin setelah akun dibuat tanpa tombol salin dan tanpa hardcode di client.
+- Eliminasi password default statis: pembuatan akun pelanggan oleh Kasir (`KasirCustomersPage.tsx`) dan Admin (`AdminUsersPage.tsx`) kini menggunakan generator password sementara ramah manusia di server (`generateHumanFriendlyPassword`: pola kata + 2 angka + simbol) yang memenuhi kebijakan password 8+ karakter. Password sementara ditampilkan jelas di layar kasir/admin setelah akun dibuat tanpa tombol salin dan tanpa hardcode di client.
 - Penutupan ekspos port backend 3000 ke LAN: Express diikat secara dinamis ke variabel `env.HOST` (default `127.0.0.1` via `.env`) sehingga tidak bisa diakses langsung melewati rate-limiter reverse proxy.
 - Dev server Vite (`frontend/vite.config.ts`) diikat ke host dinamis `process.env.VITE_HOST || '127.0.0.1'` untuk mencegah kebocoran kode sumber mentah di jaringan lokal saat development.
 - Proteksi data rekening pembayaran (`GET /api/v1/settings/payment`): mewajibkan autentikasi token (`authenticate`) dan menghapus fallback nama bank/rekening hardcoded di controller. Nomor rekening tidak lagi ditampilkan di halaman checkout, melainkan hanya di halaman detail pesanan (`OrderDetailPage.tsx`) setelah pesanan dikonfirmasi.
