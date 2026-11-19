@@ -1,58 +1,161 @@
 # Sajiin
 
-Aplikasi pemesanan makanan takeaway dengan role `user`, `kasir`, dan `admin`.
+Sajiin adalah aplikasi pemesanan makanan takeaway dengan tiga role: `user`,
+`kasir`, dan `admin`.
 
 ## Fitur
 
-- Katalog makanan dan keranjang.
+- Katalog makanan, kategori, stok, dan keranjang.
 - Pesanan ambil sendiri.
-- Pembayaran tunai atau transfer dengan validasi kasir.
-- Dashboard kasir untuk pesanan hari berjalan.
-- Manajemen menu, stok, pengguna, dan konfigurasi oleh admin.
-- Audit trail internal append-only untuk keamanan.
+- Pembayaran tunai atau transfer bank dengan validasi kasir.
+- Dashboard kasir untuk pesanan dan pelanggan.
+- Manajemen menu, pengguna, konfigurasi pembayaran, dan pengaturan oleh admin.
+- Audit trail aplikasi append-only melalui tabel `audit_logs`.
+- SSL/TLS terpisah untuk koneksi backend ke MariaDB.
+- HTTPS lokal untuk frontend Vite menggunakan sertifikat buatan sendiri.
 
 ## Stack
 
-- Backend: Node.js, TypeScript, Express, MySQL.
-- Frontend: React, Vite, TypeScript, Tailwind/CSS.
-- Security primitives: Node `node:crypto`.
+- Backend: Node.js, TypeScript, Express, MySQL/MariaDB.
+- Frontend: React, Vite, TypeScript, Tailwind CSS, dan CSS biasa.
+- Database driver dan query: `mysql2` dengan query terparameterisasi.
+- Security primitives: Node `node:crypto` dan validasi `zod`.
 
-## Run
+## Struktur penting
 
-```bash
-cd backend && npm install && npm run dev
-cd frontend && npm install && npm run dev
+```text
+backend/        REST API, service, repository, migration runner, dan test
+frontend/       aplikasi React/Vite
+db/migrations/  migration SQL berurutan
+scripts/        setup dan backup database lokal
+web/ssl/        sertifikat HTTPS lokal, tidak di-commit
+db/ssl/         sertifikat SSL MariaDB, tidak di-commit
 ```
 
-Jangan commit `.env`, password database, token, atau bukti pembayaran.
+## Prasyarat
 
-## Setup Reviewer
+- Node.js dan npm.
+- MariaDB atau MySQL lokal.
+- OpenSSL jika ingin membuat sertifikat TLS lokal.
 
-1. Buat database MySQL/MariaDB dan user `migrator` serta `app_rw` sesuai `.env`.
-2. Salin `.env.example` menjadi `.env`, lalu isi password database, `JWT_SECRET`, dan `FIELD_ENCRYPTION_KEY`.
-3. Jalankan migrasi dari root project:
+## Setup lokal
+
+1. Clone repository dan masuk ke folder proyek:
+
+   ```bash
+   git clone https://github.com/Avagrowsxzy/Sajiin.git
+   cd Sajiin
+   ```
+
+2. Siapkan database dan konfigurasi lokal. Cara termudah jika tersedia akun root
+   MariaDB/MySQL:
+
+   ```bash
+   bash scripts/setup-db.sh
+   ```
+
+   Script membuat database lokal, akun database, kredensial acak, `.env`,
+   menjalankan migration dan seed, serta memverifikasi keamanan database.
+
+   Alternatif manual:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Lalu isi credential database, `JWT_SECRET`, dan
+   `FIELD_ENCRYPTION_KEY` pada `.env` sendiri.
+
+3. Pasang dependency backend dan frontend:
+
+   ```bash
+   cd backend && npm install
+   cd ../frontend && npm install
+   ```
+
+4. Jalankan backend pada terminal pertama:
+
    ```bash
    cd backend
-   npm install
-   npm run migrate
-   npm run seed
-   npm run reset:kasir-password
-   ```
-4. Jalankan backend:
-   ```bash
    npm run dev
    ```
-5. Jalankan frontend pada terminal lain:
+
+5. Jalankan frontend pada terminal kedua:
+
    ```bash
    cd frontend
-   npm install
    npm run dev
    ```
 
-Akun seed:
+   Jika sertifikat web lokal tersedia di `web/ssl/`, Vite memakai:
 
-- Admin: `admin` (kredensial awal diatur saat migrasi awal/seed).
-- Kasir: `kasir` / `Kasir1234!` setelah menjalankan `npm run reset:kasir-password`.
-- Pelanggan: dibuat dari menu **Daftar Pelanggan** oleh kasir.
+   ```text
+   https://localhost:5173
+   ```
 
-Semua migrasi berurutan di `db/migrations/` perlu diterapkan. Sistem tidak memakai portal Audit; `audit_logs` tetap menjadi audit trail internal.
+   Jika belum ada sertifikat, Vite tetap dapat berjalan dengan HTTP. Sertifikat
+   dan private key lokal tidak boleh di-commit ke repository.
+
+## Database dan TLS
+
+Migration berada di `db/migrations/` dan harus diterapkan sesuai urutan.
+Koneksi backend ke MariaDB dapat menggunakan SSL/TLS melalui konfigurasi
+`DB_SSL` dan `DB_SSL_CA` pada `.env`.
+
+HTTPS frontend dan SSL database adalah dua konfigurasi berbeda:
+
+```text
+Browser -- HTTPS --> Vite frontend -- HTTP lokal --> Express backend
+Express backend -- SSL/TLS --> MariaDB
+```
+
+## Akun development
+
+Jangan menyimpan password akun di repository. Akun admin dibuat oleh proses
+setup lokal/seed. Password sementara harus dibaca dari konfigurasi lokal dan
+segera diganti saat login pertama.
+
+Akun pelanggan dibuat melalui alur pendaftaran aplikasi. Akun kasir dikelola
+oleh admin melalui aplikasi atau script setup lokal sesuai kebutuhan.
+
+## Verifikasi
+
+Jalankan sebelum membuat Pull Request:
+
+```bash
+cd backend
+npm run lint
+npm run type-check
+npm test
+
+cd ../frontend
+npm run lint
+npm run type-check
+npm run build
+```
+
+## Keamanan repository
+
+Jangan commit atau upload:
+
+- `.env` dan `frontend/.env.local`.
+- Password, token, secret JWT, atau encryption key.
+- Private key dan sertifikat dari `db/ssl/` atau `web/ssl/`.
+- Backup database di `backups/`.
+- Bukti pembayaran di `backend/uploads/`.
+- `node_modules/` dan hasil build.
+
+Gunakan `.env.example` dan `frontend/.env.example` sebagai template aman.
+
+## Alur kontribusi
+
+Gunakan branch fitur, bukan langsung mengubah `main`:
+
+```bash
+git checkout main
+git pull origin main
+git checkout -b feature/nama-fitur
+```
+
+Setelah selesai, jalankan verifikasi, commit, push branch, lalu buat Pull
+Request ke `main` untuk direview.
