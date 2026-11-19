@@ -1,0 +1,25 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+.env.*.local
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Data lokal/sensitif (JANGAN pernah di-commit)
+backups/
+backend/uploads/
+
+# Sertifikat SSL/TLS database (JANGAN pernah di-commit)
+db/ssl/
+*.pem
+*.srl
+
+# Sertifikat HTTPS web lokal (JANGAN pernah di-commit)
+web/ssl/
