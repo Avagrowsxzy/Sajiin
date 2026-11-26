@@ -5,6 +5,7 @@ import { AdminService } from '../services/admin.service.js';
 import { AuthService } from '../services/auth.service.js';
 import { generateHumanFriendlyPassword } from '../utils/crypto.js';
 import { appPool } from '../config/database.js';
+import { auditEvents } from '../services/audit.service.js';
 
 const adminService = new AdminService();
 const authService = new AuthService();
@@ -44,6 +45,23 @@ const customerSchema = z.object({
 });
 
 export class AdminController {
+  auditLogStream(req: Request, res: Response): void {
+    res.status(200).set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    });
+    res.flushHeaders();
+
+    const send = (log: unknown) => res.write(`event: audit\ndata: ${JSON.stringify(log)}\n\n`);
+    const heartbeat = setInterval(() => res.write(': keep-alive\n\n'), 25_000);
+    auditEvents.on('created', send);
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      auditEvents.off('created', send);
+    });
+  }
+
   async getAuditLogs(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const page = Math.max(1, Number(req.query.page) || 1);

@@ -25,6 +25,7 @@ Tidak ada OAuth/social login atau register publik. Akun pelanggan dibuat oleh ka
 - `GET /settings/payment` mengembalikan instruksi dan rekening bank transfer.
 - `PATCH /settings/payment` (admin, `system:config`) mengubah data rekening dan instruksi serta mencatat audit log.
 - `GET /admin/audit/logs` membaca audit trail aplikasi (`audit_logs`) secara read-only. Query mentah MariaDB tetap tersedia langsung melalui `mysql.general_log` untuk investigasi/keperluan praktikum, bukan melalui UI admin.
+- `GET /admin/audit/logs/stream` membuka Server-Sent Events (SSE) terautentikasi untuk mengirim audit log baru ke dashboard admin tanpa refresh; endpoint ini memakai permission `audit:read`.
 - `PATCH /me`
 
 ## Kasir/Admin

@@ -103,6 +103,7 @@
 - Halaman Admin Log dikembalikan menjadi audit trail aplikasi saja dari `audit_logs`; query mentah MariaDB tetap direkam oleh General Log dan diperiksa langsung melalui DBMS saat investigasi/praktikum, bukan ditampilkan di UI agar data sensitif tidak terekspos.
 - Perbaikan Admin Log: timezone pool MariaDB diselaraskan ke timezone lokal WIB (`timezone: 'local'`).
 - HTTPS lokal frontend ditambahkan tanpa layanan pihak ketiga: CA dan sertifikat web terpisah dibuat di `web/ssl/` dengan SAN `localhost`/`127.0.0.1`, Vite otomatis memakai `https` bila sertifikat tersedia, dan private key/sertifikat dikecualikan dari Git.
+- Dashboard Admin Log sekarang menerima audit log baru secara real-time melalui SSE native (`/admin/audit/logs/stream`) tanpa dependency tambahan; koneksi dibersihkan saat halaman ditutup.
 
 ## Berikutnya
 

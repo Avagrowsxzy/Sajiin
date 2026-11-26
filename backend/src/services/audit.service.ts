@@ -1,5 +1,8 @@
 import mysql from 'mysql2/promise';
+import { EventEmitter } from 'node:events';
 import { appPool } from '../config/database.js';
+
+export const auditEvents = new EventEmitter();
 
 export interface AuditLogInput {
   actorId?: string | null;
@@ -62,7 +65,7 @@ export async function writeAudit(
   const sanitizedOld = input.old_value ? JSON.stringify(sanitizeJson(input.old_value)) : null;
   const sanitizedNew = input.new_value ? JSON.stringify(sanitizeJson(input.new_value)) : null;
 
-  await executor.query(
+  const [result] = await executor.query<mysql.ResultSetHeader>(
     `INSERT INTO audit_logs (actor_id, action, entity, entity_id, old_value, new_value, ip_address)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [
@@ -75,4 +78,17 @@ export async function writeAudit(
       input.ipAddress ?? null,
     ]
   );
+
+  auditEvents.emit('created', {
+    id: result.insertId,
+    actor_id: input.actorId ?? null,
+    actor_name: null,
+    action: input.action,
+    entity: input.entity ?? null,
+    entity_id: input.entity_id ?? null,
+    old_value: sanitizedOld ? JSON.parse(sanitizedOld) : null,
+    new_value: sanitizedNew ? JSON.parse(sanitizedNew) : null,
+    ip_address: input.ipAddress ?? null,
+    created_at: new Date().toISOString(),
+  });
 }

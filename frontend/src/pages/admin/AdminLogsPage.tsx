@@ -43,6 +43,37 @@ export function AdminLogsPage() {
 
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    const token = apiClient.getAccessToken();
+    if (!token) return () => controller.abort();
+
+    void fetch('/api/v1/admin/audit/logs/stream', {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok || !response.body) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (!controller.signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const messages = buffer.split('\n\n');
+        buffer = messages.pop() || '';
+        for (const message of messages) {
+          const data = message.split('\n').find((line) => line.startsWith('data: '))?.slice(6);
+          if (!data) continue;
+          const log = JSON.parse(data) as AdminLog;
+          setLogs((current) => current.some((item) => item.id === log.id) ? current : [log, ...current].slice(0, 20));
+        }
+      }
+    }).catch(() => undefined);
+
+    return () => controller.abort();
+  }, []);
+
   return <div>
     <SectionHeading eyebrow="SECURITY TRAIL" title="Log Aktivitas Sistem" description="Catatan tindakan penting pengguna dan sistem secara read-only." />
     <Card>

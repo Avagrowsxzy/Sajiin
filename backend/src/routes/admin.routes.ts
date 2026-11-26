@@ -84,6 +84,10 @@ router.get('/audit/logs', requirePermission('audit:read'), (req, res, next) =>
   adminController.getAuditLogs(req, res, next)
 );
 
+router.get('/audit/logs/stream', requirePermission('audit:read'), (req, res) =>
+  adminController.auditLogStream(req, res)
+);
+
 router.get('/dashboard/summary', requirePermission('order:read:all'), (req, res, next) =>
   adminController.getDashboardSummary(req, res, next)
 );
