@@ -16,6 +16,9 @@ import { OrderService } from './services/order.service.js';
 const app = express();
 const orderService = new OrderService();
 
+// Trust only the local Vite proxy so req.ip resolves the original LAN client.
+app.set('trust proxy', 'loopback');
+
 function isOriginAllowed(origin: string): boolean {
   if (origin === env.FRONTEND_URL) return true;
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
