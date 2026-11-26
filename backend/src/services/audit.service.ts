@@ -79,10 +79,19 @@ export async function writeAudit(
     ]
   );
 
+  let actorName: string | null = null;
+  if (input.actorId) {
+    const [actorRows] = await appPool.query<mysql.RowDataPacket[]>(
+      'SELECT full_name FROM users WHERE id = ? LIMIT 1',
+      [input.actorId]
+    );
+    actorName = actorRows[0]?.full_name ? String(actorRows[0].full_name) : null;
+  }
+
   auditEvents.emit('created', {
     id: result.insertId,
     actor_id: input.actorId ?? null,
-    actor_name: null,
+    actor_name: actorName,
     action: input.action,
     entity: input.entity ?? null,
     entity_id: input.entity_id ?? null,
