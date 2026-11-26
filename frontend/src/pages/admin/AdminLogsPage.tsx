@@ -20,6 +20,32 @@ interface AdminLog {
   created_at: string;
 }
 
+function asObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function logDetails(log: AdminLog): Record<string, unknown> {
+  const oldValue = asObject(log.old_value);
+  const newValue = asObject(log.new_value);
+  const changedKeys = [...new Set([...Object.keys(oldValue), ...Object.keys(newValue)])]
+    .filter((key) => JSON.stringify(oldValue[key]) !== JSON.stringify(newValue[key]));
+  const markerKeys = ['name', 'full_name', 'username', 'title', 'menu_name', 'category_name'];
+  const marker: Record<string, unknown> = { entity: log.entity, entity_id: log.entity_id };
+  for (const key of markerKeys) {
+    if (newValue[key] !== undefined || oldValue[key] !== undefined) {
+      marker[key] = newValue[key] ?? oldValue[key];
+      break;
+    }
+  }
+
+  if (changedKeys.length === 0) return marker;
+  return {
+    ...marker,
+    old: Object.fromEntries(changedKeys.filter((key) => oldValue[key] !== undefined).map((key) => [key, oldValue[key]])),
+    new: Object.fromEntries(changedKeys.filter((key) => newValue[key] !== undefined).map((key) => [key, newValue[key]])),
+  };
+}
+
 export function AdminLogsPage() {
   const [logs, setLogs] = useState<AdminLog[]>([]);
   const [page, setPage] = useState(1);
@@ -86,7 +112,7 @@ export function AdminLogsPage() {
              <td><strong>{log.action}</strong></td>
              <td>{log.entity || '-'}{log.entity_id ? <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>{log.entity_id}</div> : null}</td>
              <td>{log.ip_address || '-'}</td>
-             <td><details><summary>Lihat JSON</summary><pre style={{ maxWidth: 280, whiteSpace: 'pre-wrap', fontSize: '.7rem' }}>{JSON.stringify({ old: log.old_value, new: log.new_value }, null, 2)}</pre></details></td>
+             <td><details><summary>Lihat perubahan</summary><pre style={{ maxWidth: 280, whiteSpace: 'pre-wrap', fontSize: '.7rem' }}>{JSON.stringify(logDetails(log), null, 2)}</pre></details></td>
           </tr>)}</tbody>
         </table>
       </div>}
