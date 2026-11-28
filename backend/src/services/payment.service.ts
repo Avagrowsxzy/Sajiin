@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { appPool } from '../config/database.js';
+import { env } from '../config/env.js';
 import { OrderRepository } from '../repositories/order.repository.js';
 import { PaymentRepository } from '../repositories/payment.repository.js';
 import { OrderService } from './order.service.js';
@@ -246,9 +247,9 @@ export class PaymentService {
     body: { gateway_ref: string; status: string; amount: number; signature: string },
     ipAddress?: string | null
   ): Promise<void> {
-    // Verifikasi signature sederhana (sandbox)
+    // Verifikasi signature HMAC dengan secret dari environment + perbandingan timing-safe (Finding M3).
     const expectedSig = this.computeSignature(body.gateway_ref, body.amount, body.status);
-    if (body.signature !== expectedSig) {
+    if (!this.safeEqual(body.signature, expectedSig)) {
       throw { status: 400, code: 'INVALID_SIGNATURE', message: 'Webhook signature tidak valid' };
     }
 
@@ -365,10 +366,20 @@ export class PaymentService {
   }
 
   /**
-   * Simulasi signature webhook (sandbox)
+   * Signature webhook HMAC-SHA256 memakai secret dari environment (Finding M3).
    */
   computeSignature(gatewayRef: string, amount: number, status: string): string {
     const data = `${gatewayRef}|${amount}|${status}`;
-    return crypto.createHmac('sha256', 'sandbox_secret_key').update(data).digest('hex');
+    return crypto.createHmac('sha256', env.PAYMENT_WEBHOOK_SECRET).update(data).digest('hex');
+  }
+
+  /**
+   * Perbandingan string timing-safe untuk mencegah timing attack pada signature.
+   */
+  private safeEqual(a: string, b: string): boolean {
+    const bufA = Buffer.from(a, 'utf8');
+    const bufB = Buffer.from(b, 'utf8');
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
   }
 }

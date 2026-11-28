@@ -87,7 +87,7 @@ export class AdminRepository {
    */
   async updateUserStatus(
     userId: string,
-    data: { is_active?: boolean; locked_until?: Date | null },
+    data: { is_active?: boolean; locked_until?: Date | null; failed_login_count?: number },
     conn?: mysql.Connection
   ): Promise<void> {
     const executor = conn || this.pool;
@@ -102,6 +102,11 @@ export class AdminRepository {
     if (data.locked_until !== undefined) {
       updates.push('locked_until = ?');
       values.push(data.locked_until);
+    }
+
+    if (data.failed_login_count !== undefined) {
+      updates.push('failed_login_count = ?');
+      values.push(data.failed_login_count);
     }
 
     if (updates.length === 0) return;

@@ -24,6 +24,12 @@ export class AdminService {
     data: { is_active?: boolean; unlock?: boolean },
     ipAddress?: string
   ) {
+    // Finding M2: perubahan status akun (nonaktifkan/unlock) hanya untuk admin.
+    // Kasir memiliki permission user:manage (untuk pelanggan) tetapi tidak boleh mengubah status akun.
+    if (ctx.role !== 'admin') {
+      throw { status: 403, code: 'FORBIDDEN', message: 'Akses ditolak' };
+    }
+
     const conn = await appPool.getConnection();
     try {
       await conn.beginTransaction();
@@ -46,7 +52,7 @@ export class AdminService {
         }
       }
 
-      const updateData: { is_active?: boolean; locked_until?: Date | null } = {};
+      const updateData: { is_active?: boolean; locked_until?: Date | null; failed_login_count?: number } = {};
 
       if (data.is_active !== undefined) {
         updateData.is_active = data.is_active;
@@ -54,6 +60,8 @@ export class AdminService {
 
       if (data.unlock === true) {
         updateData.locked_until = null;
+        // Reset juga penghitung gagal agar tidak langsung terkunci lagi setelah dibuka admin.
+        updateData.failed_login_count = 0;
       }
 
       await adminRepo.updateUserStatus(targetUserId, updateData, conn);

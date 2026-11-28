@@ -16,30 +16,53 @@ import { OrderService } from './services/order.service.js';
 const app = express();
 const orderService = new OrderService();
 
+// Sembunyikan teknologi server (Finding L1).
+app.disable('x-powered-by');
+
 // Trust only the local Vite proxy so req.ip resolves the original LAN client.
 app.set('trust proxy', 'loopback');
 
+// Allowlist origin eksplisit (CORS_ALLOWED_ORIGINS, dipisah koma) + FRONTEND_URL.
+const explicitCorsOrigins = env.CORS_ALLOWED_ORIGINS
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+// Localhost dan rentang LAN privat hanya diizinkan bila di-opt-in secara eksplisit
+// (atau di lingkungan non-produksi) agar produksi tidak terbuka lebar (Finding L3).
+const allowLocalhost = env.NODE_ENV !== 'production' || env.CORS_ALLOW_LAN_ORIGINS;
+
 function isOriginAllowed(origin: string): boolean {
   if (origin === env.FRONTEND_URL) return true;
-  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
-  if (/^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin)) return true;
+  if (explicitCorsOrigins.includes(origin)) return true;
+  if (allowLocalhost && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+  if (
+    env.CORS_ALLOW_LAN_ORIGINS &&
+    /^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$/.test(origin)
+  ) {
+    return true;
+  }
+  // Terowongan pengembangan Microsoft Dev Tunnels (HTTPS, domain terkontrol).
   if (/^https:\/\/[a-z0-9-]+\.(asse\.)?devtunnels\.ms$/.test(origin)) return true;
   return false;
 }
 
 // ponytail: native security headers without helmet; upgrade to report-to endpoint if violation analytics are needed
 app.use((_req, res, next) => {
+  // connect-src dibatasi ketat di produksi ('self'); skema luas hanya untuk dev (Vite HMR) (Finding L4).
+  const connectSrc =
+    env.NODE_ENV === 'production' ? "'self'" : "'self' http: https: ws: wss:";
   const csp = [
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https:",
-    "connect-src 'self' http: https:",
+    `connect-src ${connectSrc}`,
     "font-src 'self' https: data:",
     "object-src 'none'",
     "frame-ancestors 'self'",
     "form-action 'self'",
-    ...(process.env.NODE_ENV === 'production' ? ['upgrade-insecure-requests'] : []),
+    ...(env.NODE_ENV === 'production' ? ['upgrade-insecure-requests'] : []),
   ].join('; ');
 
   res.setHeader('Content-Security-Policy', csp);
@@ -48,7 +71,7 @@ app.use((_req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-  if (process.env.NODE_ENV === 'production') {
+  if (env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
   next();

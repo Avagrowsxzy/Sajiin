@@ -53,6 +53,7 @@ AUDIT_PASS=$(openssl rand -hex 16)
 ADMIN_PASS=$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9!@#$%^&*' | head -c 16)
 JWT_SECRET=$(openssl rand -hex 32)
 FIELD_KEY=$(openssl rand -hex 32)
+WEBHOOK_SECRET=$(openssl rand -hex 32)
 
 # 3. Eksekusi pembuatan basis data dan akun DB dengan akun root
 echo "[3/6] Membuat basis data 'foodorder' dan akun (migrator, app_rw, audit_ro)..."
@@ -128,6 +129,11 @@ NODE_ENV=development
 
 # === Frontend URL (CORS) ===
 FRONTEND_URL=http://localhost:5173
+CORS_ALLOWED_ORIGINS=
+CORS_ALLOW_LAN_ORIGINS=false
+
+# === Webhook Pembayaran (HMAC-SHA256) ===
+PAYMENT_WEBHOOK_SECRET=${WEBHOOK_SECRET}
 EOF
 
 chmod 600 "${ENV_FILE}"

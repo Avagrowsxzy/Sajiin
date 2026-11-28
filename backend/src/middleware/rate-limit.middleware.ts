@@ -77,3 +77,10 @@ export const apiRateLimiter = createRateLimiter({
   max: 300,
   message: 'Batas permintaan terlampaui. Silakan coba lagi nanti.',
 });
+
+// Rate limit khusus webhook pembayaran: 60 / menit (Finding M3).
+export const paymentWebhookRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: 'Terlalu banyak permintaan webhook. Silakan coba lagi nanti.',
+});

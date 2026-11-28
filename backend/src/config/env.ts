@@ -63,7 +63,20 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 
   // CORS
+  // Daftar origin eksplisit yang diizinkan, dipisah koma (mis. "https://app.example.com,https://admin.example.com").
   FRONTEND_URL: z.string().default('http://localhost:5173'),
+  CORS_ALLOWED_ORIGINS: z.string().default(''),
+  // Opt-in: izinkan origin LAN privat (192.168.x, 10.x, 172.16-31.x) dan localhost non-produksi.
+  // Default false agar produksi hanya menerima origin eksplisit.
+  CORS_ALLOW_LAN_ORIGINS: z
+    .string()
+    .default('false')
+    .transform((value) => ['true', '1', 'yes'].includes(value.toLowerCase())),
+
+  // Webhook pembayaran gateway
+  PAYMENT_WEBHOOK_SECRET: z
+    .string()
+    .min(32, 'PAYMENT_WEBHOOK_SECRET must be at least 32 characters'),
 });
 
 function loadEnv() {

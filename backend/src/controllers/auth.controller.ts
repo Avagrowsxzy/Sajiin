@@ -140,7 +140,8 @@ export class AuthController {
         return;
       }
 
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress;
+      // Gunakan req.ip (hasil trust proxy 'loopback') agar tidak bisa dipalsukan via header X-Forwarded-For (Finding H1).
+      const clientIp = req.ip || req.socket.remoteAddress;
       const result = await authService.login({
         ...parsed.data,
         ipAddress: clientIp,
