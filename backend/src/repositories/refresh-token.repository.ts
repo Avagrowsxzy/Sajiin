@@ -80,6 +80,23 @@ export class RefreshTokenRepository {
   }
 
   /**
+   * Klaim pencabutan token secara atomik: hanya berhasil bila token belum dicabut.
+   *
+   * Finding B-01: rotasi refresh token yang lama memakai pola baca-lalu-cabut (TOCTOU),
+   * sehingga N request paralel dengan token yang sama semuanya lolos dan menerbitkan
+   * N token anak. Dengan klaim atomik ini, hanya satu request yang menang; sisanya
+   * dianggap reuse (401) dan seluruh token user dicabut (deteksi replay RFC 6749).
+   */
+  async revokeIfActive(tokenHash: string, conn?: mysql.Connection): Promise<boolean> {
+    const executor = conn || this.pool;
+    const [result] = await executor.query<mysql.ResultSetHeader>(
+      'UPDATE refresh_tokens SET revoked_at = NOW(3) WHERE token_hash = ? AND revoked_at IS NULL',
+      [tokenHash]
+    );
+    return result.affectedRows > 0;
+  }
+
+  /**
    * Cabut semua refresh token milik user (saat ganti password, perubahan role, atau akun dinonaktifkan)
    */
   async revokeAllForUser(userId: string, conn?: mysql.Connection): Promise<void> {

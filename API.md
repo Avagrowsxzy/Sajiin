@@ -43,7 +43,9 @@ Login dilindungi lockout berlapis: **per-akun lintas IP** dan **per kombinasi IP
 - `POST /admin/payments/:id/refund`
 - `POST /admin/customers`
 - `PATCH /admin/users/:id` (admin) — mengubah `is_active`/`unlock`. Hanya role `admin`; role lain (mis. kasir yang punya `user:manage`) mendapat `403 FORBIDDEN`.
-- Admin menu/user/settings endpoints sesuai permission.
+- Admin menu/user/settings endpoints sesuai permission. Baca katalog versi admin (`GET /admin/categories`, `GET /admin/menu`, `GET /admin/menu/:id`) memerlukan permission khusus `menu:read:all` (hanya `admin`); katalog publik tetap `GET /menu`/`GET /categories` dengan `menu:read`.
+
+Operasi tulis katalog/uang divalidasi di server: `price` ≤ `9_999_999_999.99` dan `stock` ≤ `2_147_483_647` (di luar itu `400 VALIDATION_ERROR`), `image_url` hanya skema `http`/`https`, dan `page` ≤ `1_000_000`. Operasi kritis (batalkan/konfirmasi pesanan, refund, webhook, ubah status) bersifat single-winner dan atomik: pengiriman paralel menghasilkan satu sukses dan sisanya `409` (`INVALID_STATUS`/`CONFLICT`/`ORDER_EXPIRED`), bukan `500`. Semua respons API mengirim `Cache-Control: no-store`.
 
 Tidak ada endpoint `/audit/*`.
 

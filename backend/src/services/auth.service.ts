@@ -294,6 +294,8 @@ export class AuthService {
           username: user.username,
           type: 'mfa',
           jti: crypto.randomUUID(),
+          // Finding B-02: ikat sesi MFA ke versi password agar gugur bila password berubah.
+          pv: passwordFingerprint(user.password_hash),
         },
         env.JWT_SECRET,
         5 * 60
@@ -356,6 +358,16 @@ export class AuthService {
         status: 401,
         code: 'INVALID_MFA_REQUEST',
         message: 'Permintaan verifikasi MFA tidak valid',
+      };
+    }
+
+    // Finding B-02: sesi MFA terikat ke versi password saat login. Bila password telah
+    // diubah/di-reset, mfa_token lama otomatis gugur (tidak bisa dipakai setelah ganti sandi).
+    if (payload.pv && payload.pv !== passwordFingerprint(user.password_hash)) {
+      throw {
+        status: 401,
+        code: 'INVALID_MFA_TOKEN',
+        message: 'Sesi MFA telah kedaluwarsa atau tidak valid. Silakan login kembali.',
       };
     }
 
@@ -608,8 +620,24 @@ export class AuthService {
       };
     }
 
-    // ROTASI: Cabut token lama
-    await this.tokenRepo.revokeToken(tokenHash);
+    // ROTASI atomik (Finding B-01): klaim pencabutan token lama. Hanya satu request paralel
+    // yang berhasil; yang kalah diperlakukan sebagai replay -> cabut seluruh token user (401).
+    const claimed = await this.tokenRepo.revokeIfActive(tokenHash);
+    if (!claimed) {
+      await this.tokenRepo.revokeAllForUser(existing.user_id);
+      await writeAudit({
+        actorId: existing.user_id,
+        action: 'AUTH_TOKEN_REUSE_DETECTED',
+        entity: 'refresh_tokens',
+        entity_id: existing.id,
+        ipAddress,
+      });
+      throw {
+        status: 401,
+        code: 'INVALID_REFRESH_TOKEN',
+        message: 'Refresh token telah dicabut',
+      };
+    }
 
     // Terbitkan token baru
     return this.issueTokens(user, ipAddress, userAgent);

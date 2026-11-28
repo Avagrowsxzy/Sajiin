@@ -85,6 +85,9 @@ app.use((_req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  // Finding C-F7: respons API (login/token, /me, audit, bukti transfer) tidak boleh di-cache
+  // oleh browser/proxy perantara agar data sensitif tidak tersimpan/terbaca ulang.
+  res.setHeader('Cache-Control', 'no-store');
   if (env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
@@ -150,6 +153,23 @@ app.use(
           code: customErr.code || 'ERROR',
           message: customErr.message || 'Terjadi kesalahan',
         },
+      });
+      return;
+    }
+
+    // Finding C-F9: error konkurensi database bukan kesalahan server (500). Petakan ke 409
+    // agar klien tahu permintaan perlu diulang/tidak valid, tanpa membocorkan detail internal.
+    const dbCode = customErr && typeof customErr.code === 'string' ? customErr.code : '';
+    if (dbCode === 'ER_DUP_ENTRY') {
+      res.status(409).json({
+        error: { code: 'CONFLICT', message: 'Permintaan bertentangan dengan data yang sudah ada' },
+      });
+      return;
+    }
+    if (dbCode === 'ER_LOCK_DEADLOCK' || dbCode === 'ER_LOCK_WAIT_TIMEOUT') {
+      console.error('[DB_CONFLICT]', err);
+      res.status(409).json({
+        error: { code: 'CONFLICT', message: 'Permintaan bertentangan dengan transaksi lain, silakan coba lagi' },
       });
       return;
     }

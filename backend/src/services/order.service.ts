@@ -307,6 +307,10 @@ export class OrderService {
     try {
       await conn.beginTransaction();
 
+      // Finding C-F1: kunci baris pesanan lebih dulu agar validasi transisi & pengembalian stok
+      // tidak bisa balapan dengan konfirmasi pembayaran (oversell).
+      await this.orderRepo.lockForUpdate(orderId, conn);
+
       const order = await this.orderRepo.findById(orderId, ctx, conn);
       if (!order) {
         throw { status: 404, code: 'NOT_FOUND', message: 'Pesanan tidak ditemukan' };
@@ -380,6 +384,10 @@ export class OrderService {
     const conn = await appPool.getConnection();
     try {
       await conn.beginTransaction();
+
+      // Finding C-F1: kunci baris pesanan agar perubahan status admin tidak balapan
+      // dengan operasi lain (mis. konfirmasi pembayaran atau pembatalan).
+      await this.orderRepo.lockForUpdate(orderId, conn);
 
       const order = await this.orderRepo.findById(orderId, undefined, conn);
       if (!order) {

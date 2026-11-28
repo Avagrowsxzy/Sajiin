@@ -15,7 +15,9 @@ const paymentController = new PaymentController();
 router.use(authenticate);
 
 // ===== KATEGORI =====
-router.get('/categories', requirePermission('menu:read'), (req, res, next) =>
+// Finding A-F2: baca katalog admin wajib permission khusus `menu:read:all`, terpisah dari
+// `menu:read` publik, agar role `user` tidak bisa membaca field internal (created_by, item nonaktif).
+router.get('/categories', requirePermission('menu:read:all'), (req, res, next) =>
   menuController.getCategories(req, res, next)
 );
 
@@ -32,11 +34,11 @@ router.delete('/categories/:id', requirePermission('category:write'), (req, res,
 );
 
 // ===== MENU =====
-router.get('/menu', requirePermission('menu:read'), (req, res, next) =>
+router.get('/menu', requirePermission('menu:read:all'), (req, res, next) =>
   menuController.getAdminMenu(req, res, next)
 );
 
-router.get('/menu/:id', requirePermission('menu:read'), (req, res, next) =>
+router.get('/menu/:id', requirePermission('menu:read:all'), (req, res, next) =>
   menuController.getMenuById(req, res, next)
 );
 

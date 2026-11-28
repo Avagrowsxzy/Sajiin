@@ -153,39 +153,45 @@ export class PaymentService {
     ipAddress?: string | null
   ): Promise<void> {
     await this.orderService.cancelExpiredOrders();
-    const order = await this.orderRepo.findById(orderId, undefined);
-    if (!order) {
-      throw { status: 404, code: 'NOT_FOUND', message: 'Pesanan tidak ditemukan' };
-    }
-
-    if (order.status === 'cancelled') {
-      throw {
-        status: 409,
-        code: 'ORDER_EXPIRED',
-        message: 'Pesanan sudah kedaluwarsa karena melebihi batas waktu 5 menit tanpa bukti transfer/konfirmasi',
-      };
-    }
-
-    if (order.status !== 'awaiting_confirmation') {
-      throw {
-        status: 409,
-        code: 'INVALID_STATUS',
-        message: 'Pesanan tidak sedang menunggu konfirmasi pembayaran',
-      };
-    }
-
-    const payment = await this.paymentRepo.findByOrderId(orderId);
-    if (!payment) {
-      throw { status: 404, code: 'NOT_FOUND', message: 'Data pembayaran tidak ditemukan' };
-    }
-
-    if (payment.method === 'transfer' && !payment.proof_path) {
-      throw { status: 409, code: 'PROOF_REQUIRED', message: 'Bukti transfer wajib diunggah sebelum pembayaran divalidasi' };
-    }
 
     const conn = await appPool.getConnection();
     try {
       await conn.beginTransaction();
+
+      // Finding C-F1: kunci baris pesanan lebih dulu. Validasi status DI DALAM transaksi
+      // (setelah kunci) memastikan hanya satu operasi yang boleh mengubah awaiting_confirmation,
+      // sehingga cancel vs konfirmasi tidak bisa sama-sama lolos (mencegah oversell / notifikasi ganda).
+      await this.orderRepo.lockForUpdate(orderId, conn);
+
+      const order = await this.orderRepo.findById(orderId, undefined, conn);
+      if (!order) {
+        throw { status: 404, code: 'NOT_FOUND', message: 'Pesanan tidak ditemukan' };
+      }
+
+      if (order.status === 'cancelled') {
+        throw {
+          status: 409,
+          code: 'ORDER_EXPIRED',
+          message: 'Pesanan sudah kedaluwarsa karena melebihi batas waktu 5 menit tanpa bukti transfer/konfirmasi',
+        };
+      }
+
+      if (order.status !== 'awaiting_confirmation') {
+        throw {
+          status: 409,
+          code: 'INVALID_STATUS',
+          message: 'Pesanan tidak sedang menunggu konfirmasi pembayaran',
+        };
+      }
+
+      const payment = await this.paymentRepo.findByOrderId(orderId, conn);
+      if (!payment) {
+        throw { status: 404, code: 'NOT_FOUND', message: 'Data pembayaran tidak ditemukan' };
+      }
+
+      if (payment.method === 'transfer' && !payment.proof_path) {
+        throw { status: 409, code: 'PROOF_REQUIRED', message: 'Bukti transfer wajib diunggah sebelum pembayaran divalidasi' };
+      }
 
       await this.paymentRepo.updateStatus(payment.id, 'settled', new Date(), conn);
       await this.orderRepo.updateStatus(orderId, 'paid', conn);
@@ -272,15 +278,26 @@ export class PaymentService {
     try {
       await conn.beginTransaction();
 
+      // Finding C-F4: klaim perubahan status secara atomik. Bila request paralel sudah
+      // memproses lebih dulu, klaim gagal -> tidak ada pemrosesan/audit ganda (idempoten).
+      const claimed = await this.paymentRepo.claimWebhookStatus(
+        payment.id,
+        body.status === 'settled' ? 'settled' : 'failed',
+        body.status === 'settled' ? new Date() : null,
+        conn
+      );
+
+      if (!claimed) {
+        await conn.rollback();
+        return;
+      }
+
       if (body.status === 'settled') {
-        await this.paymentRepo.updateStatus(payment.id, 'settled', new Date(), conn);
         // Update order: pending -> paid
         const order = await this.orderRepo.findById(payment.order_id, undefined, conn);
         if (order && order.status === 'pending') {
           await this.orderRepo.updateStatus(payment.order_id, 'paid', conn);
         }
-      } else if (body.status === 'failed') {
-        await this.paymentRepo.updateStatus(payment.id, 'failed', null, conn);
       }
 
       await writeAudit(
@@ -324,24 +341,25 @@ export class PaymentService {
     adminUserId: string,
     ipAddress?: string | null
   ): Promise<void> {
-    const payment = await this.paymentRepo.findById(paymentId);
-    if (!payment) {
-      throw { status: 404, code: 'NOT_FOUND', message: 'Pembayaran tidak ditemukan' };
-    }
-
-    if (payment.status !== 'settled') {
-      throw {
-        status: 409,
-        code: 'INVALID_STATUS',
-        message: 'Hanya pembayaran berstatus settled yang dapat di-refund',
-      };
-    }
-
     const conn = await appPool.getConnection();
     try {
       await conn.beginTransaction();
 
-      await this.paymentRepo.updateStatus(payment.id, 'refunded', null, conn);
+      const payment = await this.paymentRepo.findByIdForUpdate(paymentId, conn);
+      if (!payment) {
+        throw { status: 404, code: 'NOT_FOUND', message: 'Pembayaran tidak ditemukan' };
+      }
+
+      // Finding C-F2: refund diklaim secara atomik (hanya bila masih settled), sehingga
+      // request paralel tidak bisa melakukan double-refund; yang kalah dibalas 409.
+      const refunded = await this.paymentRepo.updateStatusIf(paymentId, 'refunded', 'settled', conn);
+      if (!refunded) {
+        throw {
+          status: 409,
+          code: 'INVALID_STATUS',
+          message: 'Hanya pembayaran berstatus settled yang dapat di-refund',
+        };
+      }
 
       await writeAudit(
         {

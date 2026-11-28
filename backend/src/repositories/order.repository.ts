@@ -113,6 +113,18 @@ export class OrderRepository {
   }
 
   /**
+   * Kunci baris pesanan (SELECT ... FOR UPDATE) di dalam transaksi yang diberikan.
+   *
+   * Finding C-F1: tanpa kunci ini, dua operasi paralel (mis. user batalkan vs admin konfirmasi
+   * pembayaran) sama-sama membaca status lama lalu sama-sama menulis, sehingga stok bisa
+   * dikembalikan namun pesanan tetap aktif (oversell). Kunci baris membuat transaksi kedua
+   * menunggu hingga commit dan membaca status terbaru.
+   */
+  async lockForUpdate(id: string, conn: mysql.Connection): Promise<void> {
+    await conn.query('SELECT id FROM orders WHERE id = ? FOR UPDATE', [id]);
+  }
+
+  /**
    * Ambil item-item pesanan
    */
   async getOrderItems(

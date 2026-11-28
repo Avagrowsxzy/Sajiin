@@ -288,4 +288,77 @@ describe('Menu & Category API Integration Tests', () => {
       expect(res.body.error.code).toBe('CATEGORY_HAS_ITEMS');
     });
   });
+
+  describe('Ronda 3 — hardening input menu', () => {
+    it('menolak page di luar batas tanpa 500 (Finding C-F5)', async () => {
+      const res = await request(app)
+        .get('/api/v1/menu')
+        .query({ page: '9223372036854775808' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('menolak harga melebihi kapasitas kolom tanpa 500 (Finding C-F6)', async () => {
+      const res = await request(app)
+        .post('/api/v1/admin/menu')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          category_id: categoryId,
+          name: 'Harga Overflow',
+          price: 1e30,
+          stock: 1,
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('menolak stok melebihi kapasitas kolom tanpa 500 (Finding C-F6)', async () => {
+      const res = await request(app)
+        .post('/api/v1/admin/menu')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          category_id: categoryId,
+          name: 'Stok Overflow',
+          price: 10000,
+          stock: 1e30,
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('menolak image_url dengan skema non-http(s) (Finding C-F8)', async () => {
+      const res = await request(app)
+        .post('/api/v1/admin/menu')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          category_id: categoryId,
+          name: 'Gambar Jahat',
+          price: 10000,
+          stock: 1,
+          image_url: 'javascript:alert(1)',
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('menerima image_url http/https yang sah', async () => {
+      const res = await request(app)
+        .post('/api/v1/admin/menu')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          category_id: categoryId,
+          name: 'Gambar Sah',
+          price: 10000,
+          stock: 1,
+          image_url: 'https://example.com/gambar.png',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.image_url).toBe('https://example.com/gambar.png');
+    });
+  });
 });

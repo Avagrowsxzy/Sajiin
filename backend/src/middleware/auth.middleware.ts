@@ -19,6 +19,7 @@ declare global {
 
 export type PermissionKey =
   | 'menu:read'
+  | 'menu:read:all'
   | 'menu:write'
   | 'category:write'
   | 'cart:manage:own'
@@ -55,6 +56,7 @@ const ROLE_PERMISSIONS: Record<'user' | 'admin' | 'kasir', Set<PermissionKey>> =
   ]),
   admin: new Set<PermissionKey>([
     'menu:read',
+    'menu:read:all',
     'menu:write',
     'category:write',
     'order:read:all',

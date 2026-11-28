@@ -36,6 +36,14 @@
 - Perubahan status akun (`PATCH /admin/users/:id`, nonaktifkan/unlock) hanya untuk role `admin` (`403 FORBIDDEN` untuk role lain), karena permission `user:manage` pada kasir hanya untuk mengelola pelanggan.
 - Webhook pembayaran diverifikasi dengan HMAC-SHA256 memakai `PAYMENT_WEBHOOK_SECRET` (minimal 32 karakter) dan perbandingan **timing-safe**, serta dibatasi rate limit khusus.
 - Halaman audit admin hanya menampilkan audit trail aplikasi secara read-only. Query mentah MariaDB tidak ditampilkan di UI agar data sensitif tidak terekspos; query dapat diperiksa langsung oleh administrator database melalui `mysql.general_log` saat investigasi/praktikum.
+- **Ronda 3 — operasi kritis kini atomik/kunci-baris:** perubahan status pesanan dan pembayaran (batalkan, konfirmasi pembayaran, ubah status admin, refund, webhook) memakai `SELECT ... FOR UPDATE` / `UPDATE ... WHERE status = ?` di dalam transaksi, sehingga hanya satu permintaan paralel yang menang dan sisanya ditolak bersih (`409`). Penyerang tidak bisa memicu oversell stok, refund ganda, atau notifikasi pembayaran ganda dengan mengirim banyak permintaan bersamaan (Finding C-F1, C-F2, C-F3, C-F4).
+- **Ronda 3 — error konkurensi database tidak lagi `500`:** kode error MariaDB `ER_DUP_ENTRY`, `ER_LOCK_DEADLOCK`, dan `ER_LOCK_WAIT_TIMEOUT` dipetakan ke `409 CONFLICT` tanpa membocorkan detail internal (Finding C-F9).
+- **Ronda 3 — batas input katalog & paginasi:** `price` dibatasi `DECIMAL(12,2)` dan `stock` dibatasi `INT`, `page` dibatasi `1_000_000`, dan `image_url` hanya menerima skema `http`/`https` — mencegah overflow yang sebelumnya membalas `500` dan menutup `javascript:`/`data:` (Finding C-F5, C-F6, C-F8).
+- **Ronda 3 — `Cache-Control: no-store`** dikirim pada seluruh respons API agar respons sensitif (login/token, `/me`, audit, bukti transfer) tidak disimpan di cache browser/proxy (Finding C-F7).
+- **Ronda 3 — baca katalog admin butuh permission khusus `menu:read:all`:** role `user` tidak lagi bisa membaca katalog admin (field internal/nonaktif) via `/admin/menu` maupun `/admin/categories` (Finding A-F2).
+- **Ronda 3 — rotasi refresh token atomik:** klaim pencabutan token lama memakai `UPDATE ... WHERE revoked_at IS NULL`, sehingga banyak request paralel dengan token yang sama hanya menghasilkan satu token baru; sisanya dianggap replay dan seluruh token user dicabut (`401`), sesuai RFC 6749 §10.4 (Finding B-01).
+- **Ronda 3 — `mfa_token` terikat versi password:** selain sekali pakai (`jti`), `mfa_token` kini membawa `pv` sehingga otomatis gugur setelah password diubah/direset (Finding B-02).
+- **Ronda 3 — jalur entri staff dinormalisasi:** permintaan ke `/staff.html` dengan varian path (`//staff.html`, `/%73taff.html`, `/staff.html/`, dsb.) tetap dibalas `404`; hanya jalur rahasia (`STAFF_LOGIN_PATH`) yang me-rewrite ke entri staff (Finding A-F1).
 
 ## Pembayaran
 

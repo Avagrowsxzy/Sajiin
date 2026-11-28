@@ -26,7 +26,7 @@ const claimPaymentSchema = z.object({
 });
 
 const orderQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(1_000_000).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   status: z
     .enum(['pending', 'awaiting_confirmation', 'paid', 'preparing', 'ready', 'completed', 'cancelled'])

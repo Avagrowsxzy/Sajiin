@@ -11,7 +11,7 @@ const adminService = new AdminService();
 const authService = new AuthService();
 
 const paginationSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(1_000_000).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   include_inactive: z.coerce.boolean().default(false),
 });
@@ -64,7 +64,7 @@ export class AdminController {
 
   async getAuditLogs(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const page = Math.max(1, Number(req.query.page) || 1);
+      const page = Math.min(1_000_000, Math.max(1, Number(req.query.page) || 1));
       const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
       const offset = (page - 1) * limit;
       const [countRows] = await appPool.query<mysql.RowDataPacket[]>('SELECT COUNT(*) AS total FROM audit_logs');

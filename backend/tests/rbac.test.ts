@@ -31,6 +31,17 @@ describe('RBAC & Authorization Matrix Tests', () => {
     expect(res.status).toBe(403);
   });
 
+  it('user tidak dapat membaca katalog admin /admin/menu (Finding A-F2)', async () => {
+    const res = await request(app).get('/api/v1/admin/menu').set('Authorization', `Bearer ${userToken}`);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('admin tetap dapat membaca katalog admin /admin/menu', async () => {
+    const res = await request(app).get('/api/v1/admin/menu').set('Authorization', `Bearer ${adminToken}`);
+    expect(res.status).toBe(200);
+  });
+
   it('admin dapat mengakses dashboard admin', async () => {
     const res = await request(app).get('/api/v1/admin/dashboard/summary').set('Authorization', `Bearer ${adminToken}`);
     expect(res.status).toBe(200);

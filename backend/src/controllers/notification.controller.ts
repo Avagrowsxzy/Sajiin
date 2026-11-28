@@ -5,7 +5,7 @@ import { NotificationService } from '../services/notification.service.js';
 const notificationService = new NotificationService();
 
 const listSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(1_000_000).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   unread: z.coerce.boolean().optional(),
 });

@@ -240,6 +240,82 @@ describe('Auth API Integration Tests', () => {
     });
   });
 
+  describe('Ronda 3 — hardening siklus token', () => {
+    it('rotasi refresh token atomik: hanya satu dari banyak request paralel yang berhasil (Finding B-01)', async () => {
+      const username = `test_user_race_${Date.now()}`;
+      const { tokens } = await createTestUser({ full_name: 'Race Refresh', username });
+      const rawRefresh = tokens.refresh_token;
+
+      const results = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          request(app).post('/api/v1/auth/refresh').send({ refresh_token: rawRefresh })
+        )
+      );
+
+      const successes = results.filter((r) => r.status === 200).length;
+      expect(successes).toBe(1);
+      const failures = results.filter((r) => r.status !== 200);
+      for (const fail of failures) {
+        expect(fail.status).toBe(401);
+        expect(fail.body.error.code).toBe('INVALID_REFRESH_TOKEN');
+      }
+    });
+
+    it('mfa_token gugur setelah password diubah (Finding B-02)', async () => {
+      const username = `test_user_mfapw_${Date.now()}`;
+      const originalPassword = 'StrongPassword123!';
+      const createdAt = await createTestUser({
+        full_name: 'MFA Password User',
+        username,
+        password: originalPassword,
+      });
+
+      // Aktifkan PIN MFA + pertanyaan keamanan.
+      const enableMfa = await request(app)
+        .post('/api/v1/auth/mfa/confirm')
+        .set('Authorization', `Bearer ${createdAt.tokens.access_token}`)
+        .send({
+          code: '742918',
+          security_answers: ['Milo', 'Bandung', 'SDN 1 Merdeka'],
+        });
+      expect(enableMfa.status).toBe(200);
+
+      // Login pertama: simpan mfa_token M1 tanpa memakainya.
+      const firstLogin = await request(app).post('/api/v1/auth/login').send({
+        username,
+        password: originalPassword,
+      });
+      expect(firstLogin.body.data.mfa_required).toBe(true);
+      const unusedMfaToken = firstLogin.body.data.mfa_token as string;
+
+      // Login kedua: verifikasi untuk mendapat access token, lalu ganti password.
+      const secondLogin = await request(app).post('/api/v1/auth/login').send({
+        username,
+        password: originalPassword,
+      });
+      const verified = await request(app).post('/api/v1/auth/mfa/verify').send({
+        mfa_token: secondLogin.body.data.mfa_token,
+        code: '742918',
+      });
+      expect(verified.status).toBe(200);
+      const accessToken = verified.body.data.tokens.access_token as string;
+
+      const changePassword = await request(app)
+        .post('/api/v1/auth/password/change')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ old_password: originalPassword, new_password: 'BrandNewPassword456!' });
+      expect(changePassword.status).toBe(200);
+
+      // mfa_token yang diterbitkan sebelum ganti password harus ditolak walau PIN benar.
+      const useUnusedToken = await request(app).post('/api/v1/auth/mfa/verify').send({
+        mfa_token: unusedMfaToken,
+        code: '742918',
+      });
+      expect(useUnusedToken.status).toBe(401);
+      expect(useUnusedToken.body.error.code).toBe('INVALID_MFA_TOKEN');
+    });
+  });
+
   describe('POST /api/v1/auth/password/change', () => {
     it('harus menolak ganti password jika belum terotentikasi', async () => {
       const res = await request(app).post('/api/v1/auth/password/change').send({

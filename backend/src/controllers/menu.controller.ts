@@ -16,6 +16,19 @@ const categoryCreateSchema = z.object({
 
 const categoryUpdateSchema = categoryCreateSchema;
 
+// Batas nilai mengikuti kolom DB: price DECIMAL(12,2), stock INT — mencegah overflow
+// (Finding C-F6) yang sebelumnya membuat server membalas 500.
+const MAX_PRICE = 9_999_999_999.99;
+const MAX_STOCK = 2_147_483_647;
+const MAX_PAGE = 1_000_000;
+
+// Finding C-F8: `z.string().url()` menerima skema seperti `javascript:`/`data:`. Batasi ke http/https.
+const httpImageUrl = z
+  .string()
+  .url('URL gambar tidak valid')
+  .max(255)
+  .refine((v) => /^https?:\/\//i.test(v), 'URL gambar harus memakai skema http atau https');
+
 const menuCreateSchema = z.object({
   category_id: z.number().int().positive('Kategori ID harus positif'),
   name: z
@@ -31,9 +44,9 @@ const menuCreateSchema = z.object({
     .refine((v) => !/[<>]/.test(v), 'Deskripsi tidak boleh mengandung karakter < atau >')
     .optional()
     .nullable(),
-  price: z.number().nonnegative('Harga tidak boleh negatif'),
-  stock: z.number().int().nonnegative('Stok tidak boleh negatif'),
-  image_url: z.string().url('URL gambar tidak valid').max(255).optional().nullable(),
+  price: z.number().nonnegative('Harga tidak boleh negatif').max(MAX_PRICE, 'Harga melebihi batas maksimum'),
+  stock: z.number().int().nonnegative('Stok tidak boleh negatif').max(MAX_STOCK, 'Stok melebihi batas maksimum'),
+  image_url: httpImageUrl.optional().nullable(),
   is_available: z.boolean().optional(),
 });
 
@@ -53,14 +66,14 @@ const menuUpdateSchema = z.object({
     .refine((v) => !/[<>]/.test(v), 'Deskripsi tidak boleh mengandung karakter < atau >')
     .optional()
     .nullable(),
-  price: z.number().nonnegative().optional(),
-  stock: z.number().int().nonnegative().optional(),
-  image_url: z.string().url().max(255).optional().nullable(),
+  price: z.number().nonnegative().max(MAX_PRICE, 'Harga melebihi batas maksimum').optional(),
+  stock: z.number().int().nonnegative().max(MAX_STOCK, 'Stok melebihi batas maksimum').optional(),
+  image_url: httpImageUrl.optional().nullable(),
   is_available: z.boolean().optional(),
 });
 
 const paginationSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(MAX_PAGE, 'Halaman melebihi batas maksimum').default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   category_id: z.coerce.number().int().positive().optional(),
   q: z.string().max(100).optional(),

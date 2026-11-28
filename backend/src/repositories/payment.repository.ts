@@ -57,6 +57,25 @@ export class PaymentRepository {
     return this.map(rows[0]);
   }
 
+  /**
+   * Baca pembayaran dengan kunci baris (SELECT ... FOR UPDATE) di dalam transaksi.
+   *
+   * Finding C-F2: refund perlu membaca baris dengan kunci tulis lebih dulu. Tanpa kunci,
+   * di isolation REPEATABLE READ, transaksi yang lebih dulu hanya melakukan consistent
+   * read lalu UPDATE pada baris yang sudah diubah transaksi lain akan memicu error
+   * MariaDB 1020 ("Record has changed since last read") yang sebelumnya membalas 500.
+   * Dengan kunci, transaksi kedua menunggu commit, membaca status terbaru, dan kalah
+   * secara bersih (409) tanpa error konkurensi.
+   */
+  async findByIdForUpdate(id: string, conn: mysql.Connection): Promise<PaymentEntity | null> {
+    const [rows] = await conn.query<mysql.RowDataPacket[]>(
+      'SELECT * FROM payments WHERE id = ? FOR UPDATE',
+      [id]
+    );
+    if (rows.length === 0) return null;
+    return this.map(rows[0]);
+  }
+
   async findByGatewayRef(ref: string, conn?: mysql.Connection): Promise<PaymentEntity | null> {
     const executor = conn || this.pool;
     const [rows] = await executor.query<mysql.RowDataPacket[]>(
@@ -85,6 +104,45 @@ export class PaymentRepository {
         [status, id]
       );
     }
+  }
+
+  /**
+   * Update status hanya bila status saat ini sama dengan `expectedStatus` (atomik).
+   * Finding C-F2: dipakai untuk refund idempoten — hanya satu request paralel yang
+   * berhasil mengubah baris; sisanya mengembalikan `false` sehingga bisa dibalas 409.
+   */
+  async updateStatusIf(
+    id: string,
+    status: PaymentStatus,
+    expectedStatus: PaymentStatus,
+    conn?: mysql.Connection
+  ): Promise<boolean> {
+    const executor = conn || this.pool;
+    const [result] = await executor.query<mysql.ResultSetHeader>(
+      'UPDATE payments SET status = ? WHERE id = ? AND status = ?',
+      [status, id, expectedStatus]
+    );
+    return result.affectedRows > 0;
+  }
+
+  /**
+   * Klaim perubahan status dari webhook secara atomik & idempoten (Finding C-F4).
+   * Hanya mengubah bila status berubah dan pembayaran belum selesai (bukan settled/refunded),
+   * sehingga pengiriman webhook berganda tidak memproses & mencatat audit dua kali.
+   */
+  async claimWebhookStatus(
+    id: string,
+    status: 'settled' | 'failed',
+    paidAt: Date | null,
+    conn?: mysql.Connection
+  ): Promise<boolean> {
+    const executor = conn || this.pool;
+    const [result] = await executor.query<mysql.ResultSetHeader>(
+      `UPDATE payments SET status = ?, paid_at = ?
+       WHERE id = ? AND status <> ? AND status NOT IN ('settled', 'refunded')`,
+      [status, paidAt, id, status]
+    );
+    return result.affectedRows > 0;
   }
 
   async updateGatewayRef(

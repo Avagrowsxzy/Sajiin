@@ -383,6 +383,146 @@ describe('Order & Payment API Integration Tests', () => {
     });
   });
 
+  describe('Ronda 3 — race condition order & payment', () => {
+    let raceMenuId: string;
+    const QUANTITY = 3;
+
+    beforeAll(async () => {
+      raceMenuId = `menu_race_${Date.now()}`;
+      await appPool.query(
+        `INSERT INTO menu_items (id, category_id, name, description, price, stock, is_available)
+         VALUES (?, ?, 'Menu Race', 'race', 15000.00, 100, 1)`,
+        [raceMenuId, categoryId]
+      );
+    });
+
+    afterAll(async () => {
+      if (raceMenuId) {
+        await appPool.query('UPDATE menu_items SET is_available = 0 WHERE id = ?', [raceMenuId]);
+      }
+    });
+
+    async function stockOf(menuId: string): Promise<number> {
+      const [rows] = await appPool.query<any[]>('SELECT stock FROM menu_items WHERE id = ?', [menuId]);
+      return Number(rows[0].stock);
+    }
+
+    async function createClaimedOrder(
+      method: 'tunai' | 'transfer',
+      quantity: number
+    ): Promise<{ orderId: string; paymentId: string }> {
+      // Bersihkan keranjang agar sisa item dari test sebelumnya tidak ikut ter-checkout.
+      await request(app)
+        .delete('/api/v1/me/cart')
+        .set('Authorization', `Bearer ${userAToken}`);
+
+      await request(app)
+        .put(`/api/v1/me/cart/items/${raceMenuId}`)
+        .set('Authorization', `Bearer ${userAToken}`)
+        .send({ quantity });
+
+      const orderRes = await request(app)
+        .post('/api/v1/orders')
+        .set('Authorization', `Bearer ${userAToken}`)
+        .send({ payment_method: method });
+      expect(orderRes.status).toBe(201);
+      const orderId = orderRes.body.data.id as string;
+
+      const payRes = await request(app)
+        .get(`/api/v1/orders/${orderId}/payment`)
+        .set('Authorization', `Bearer ${userAToken}`);
+      expect(payRes.status).toBe(200);
+      return { orderId, paymentId: payRes.body.data.id as string };
+    }
+
+    async function countConfirmedNotifications(orderId: string): Promise<number> {
+      const [rows] = await appPool.query<any[]>(
+        `SELECT COUNT(*) AS n FROM notifications
+         WHERE user_id = ? AND order_id = ? AND title = 'Pembayaran Dikonfirmasi'`,
+        [userAId, orderId]
+      );
+      return Number(rows[0].n);
+    }
+
+    it('cancel vs confirm-payment paralel: hanya satu yang menang & stok konsisten (Finding C-F1)', async () => {
+      const { orderId } = await createClaimedOrder('tunai', QUANTITY);
+      const stockAfterCheckout = await stockOf(raceMenuId);
+
+      const [cancelRes, confirmRes] = await Promise.all([
+        request(app)
+          .post(`/api/v1/orders/${orderId}/cancel`)
+          .set('Authorization', `Bearer ${userAToken}`),
+        request(app)
+          .patch(`/api/v1/admin/orders/${orderId}/confirm-payment`)
+          .set('Authorization', `Bearer ${adminToken}`),
+      ]);
+
+      const cancelWon = cancelRes.status === 200;
+      const confirmWon = confirmRes.status === 200;
+      expect([cancelWon, confirmWon].filter(Boolean).length).toBe(1);
+      expect(cancelWon ? confirmRes.status : cancelRes.status).toBe(409);
+
+      const finalStock = await stockOf(raceMenuId);
+      if (cancelWon) {
+        // Pembatalan menang -> stok dikembalikan tepat satu kali.
+        expect(finalStock).toBe(stockAfterCheckout + QUANTITY);
+      } else {
+        // Konfirmasi menang -> stok tetap terpakai, tidak dikembalikan.
+        expect(finalStock).toBe(stockAfterCheckout);
+      }
+
+      const orderRes = await request(app)
+        .get(`/api/v1/orders/${orderId}`)
+        .set('Authorization', `Bearer ${userAToken}`);
+      expect(orderRes.body.data.status).toBe(cancelWon ? 'cancelled' : 'paid');
+    });
+
+    it('konfirmasi pembayaran paralel tidak menggandakan notifikasi/audit (Finding C-F3)', async () => {
+      const { orderId } = await createClaimedOrder('tunai', 1);
+      const before = await countConfirmedNotifications(orderId);
+
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          request(app)
+            .patch(`/api/v1/admin/orders/${orderId}/confirm-payment`)
+            .set('Authorization', `Bearer ${adminToken}`)
+        )
+      );
+
+      expect(results.filter((r) => r.status === 200).length).toBe(1);
+      const after = await countConfirmedNotifications(orderId);
+      expect(after - before).toBe(1);
+    });
+
+    it('refund paralel tidak menggandakan refund (Finding C-F2)', async () => {
+      const { orderId, paymentId } = await createClaimedOrder('tunai', 1);
+
+      const confirmRes = await request(app)
+        .patch(`/api/v1/admin/orders/${orderId}/confirm-payment`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(confirmRes.status).toBe(200);
+
+      const results = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          request(app)
+            .post(`/api/v1/admin/payments/${paymentId}/refund`)
+            .set('Authorization', `Bearer ${adminToken}`)
+        )
+      );
+
+      expect(results.filter((r) => r.status === 200).length).toBe(1);
+      for (const fail of results.filter((r) => r.status !== 200)) {
+        expect(fail.status).toBe(409);
+      }
+
+      const [rows] = await appPool.query<any[]>(
+        'SELECT status FROM payments WHERE id = ?',
+        [paymentId]
+      );
+      expect(rows[0].status).toBe('refunded');
+    });
+  });
+
   describe('Pembatalan otomatis pesanan > 5 menit (Anti-Spam)', () => {
     it('Membatalkan otomatis pesanan > 5 menit tanpa bukti transfer/konfirmasi & mengembalikan stok, namun tidak membatalkan transfer yang sudah unggah bukti', async () => {
       // Ambil stok awal menuItemId
