@@ -104,6 +104,16 @@
 - Perbaikan Admin Log: timezone pool MariaDB diselaraskan ke timezone lokal WIB (`timezone: 'local'`).
 - HTTPS lokal frontend ditambahkan tanpa layanan pihak ketiga: CA dan sertifikat web terpisah dibuat di `web/ssl/` dengan SAN `localhost`/`127.0.0.1`, Vite otomatis memakai `https` bila sertifikat tersedia, dan private key/sertifikat dikecualikan dari Git.
 - Dashboard Admin Log sekarang menerima audit log baru secara real-time melalui SSE native (`/admin/audit/logs/stream`) tanpa dependency tambahan; koneksi dibersihkan saat halaman ditutup.
+- Hardening database (Modul X) diterapkan pada MariaDB 13.0.2:
+  - Akun tidak terpakai dibersihkan: tidak ada user anonim (`User = ''`), `plain_user@'%'` sisa praktikum SSL dihapus, dan database `test` tidak ada.
+  - Akun `root` dibatasi ke `localhost` (tidak ada `root@'%'`).
+  - Password policy memakai plugin bawaan MariaDB `simple_password_check` (padanan `validate_password` milik MySQL): minimal 8 karakter, wajib angka, huruf besar/kecil, dan karakter khusus. Plugin `ACTIVE` dan nilainya bertahan setelah restart karena ditulis di `[mysqld]`.
+  - `max_connections` diturunkan dari 151 menjadi 50.
+  - `bind-address = 127.0.0.1` dipindahkan ke `[mysqld]`; server hanya listen di `127.0.0.1:3308` sehingga akses remote ditolak.
+  - Port tetap non-default `3308`.
+  - Catatan kompatibilitas MariaDB: `validate_password` tidak tersedia (`ERROR 1193`), dan `UPDATE mysql.user` gagal karena `mysql.user` berupa view sejak MariaDB 10.4 (`ERROR 1288`) sehingga dipakai `RENAME USER`.
+  - `PUBLIC` adalah role bawaan MariaDB (bukan user anonim) sehingga tidak dihapus; `mysql_old_password` bersifat built-in dan tidak dipakai akun mana pun.
+  - Opsi di luar cakupan modul (`local_infile`, `skip_name_resolve`) sengaja dibiarkan pada nilai default.
 
 ## Berikutnya
 
@@ -119,6 +129,7 @@
 
 ## Verifikasi Terakhir
 
+- Hardening database terverifikasi setelah `systemctl restart mariadb`: `max_connections = 50`, `bind_address = 127.0.0.1`, `port = 3308`, `simple_password_check` `ACTIVE` dengan nilai `8/1/1/1`, dan socket hanya `127.0.0.1:3308`.
 - Enkripsi koneksi database SSL/TLS aktif: backend berhasil connect dengan `DB_SSL=true` dan ditolak saat `DB_SSL=false` (bukti `app_rw REQUIRE SSL` bekerja).
 - Frontend lint, type-check, dan build lulus (`npm run lint && npm run type-check && npm run build`).
 - Backend lint, type-check, dan seluruh 7 test suite (79 test) lulus (`npm run lint && npm run type-check && npm test`).
