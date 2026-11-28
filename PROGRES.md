@@ -37,7 +37,7 @@
 - Register publik ditutup; pelanggan diarahkan untuk dibuatkan akun oleh kasir.
 - QRIS dihapus dari pilihan pembayaran; metode resmi aplikasi hanya tunai dan transfer.
 - Kartu dashboard kasir dapat mengambil dan menampilkan bukti transfer dengan endpoint terotorisasi.
-- Akses LAN diaktifkan secara aman melalui Vite proxy relative URL (`/api/v1`) dan CORS dinamis backend (`backend/src/index.ts`) yang mengizinkan localhost, IP privat LAN (192.168.x.x, 10.x.x.x, 172.16-31.x.x), serta devtunnels tanpa mengekspos port MySQL (`127.0.0.1`) atau membuka origin publik tak dikenal. File `frontend/.env.local` disetel ke relative URL `VITE_API_URL=/api/v1` agar perangkat lain di jaringan WiFi/LAN tidak memanggil `localhost:3000` milik perangkat mereka sendiri.
+- Akses LAN diaktifkan secara aman melalui Vite proxy relative URL (`/api/v1`) dan CORS backend (`backend/src/index.ts`) berbasis allowlist eksplisit: `FRONTEND_URL` + `CORS_ALLOWED_ORIGINS`. Origin localhost dan IP privat LAN (192.168.x.x, 10.x.x.x, 172.16-31.x.x) hanya diizinkan bila `CORS_ALLOW_LAN_ORIGINS=true` (atau di luar produksi), tanpa mengekspos port MySQL (`127.0.0.1`) atau membuka origin publik tak dikenal. File `frontend/.env.local` disetel ke relative URL `VITE_API_URL=/api/v1` agar perangkat lain di jaringan WiFi/LAN tidak memanggil `localhost:3000` milik perangkat mereka sendiri.
 - Batas body JSON Express dinaikkan ke `5mb` untuk mengakomodasi upload bukti transfer Base64 tanpa error 413.
 - Kebijakan kompleksitas password diterapkan:
   - Role Administrasi (`admin` & `kasir`): minimal 15 karakter, wajib kombinasi huruf besar, huruf kecil, angka, simbol, wajib PIN MFA 6 digit saat login, dan kebijakan wajib ganti password 1 tahun sekali.
@@ -115,6 +115,27 @@
   - `PUBLIC` adalah role bawaan MariaDB (bukan user anonim) sehingga tidak dihapus; `mysql_old_password` bersifat built-in dan tidak dipakai akun mana pun.
   - Opsi di luar cakupan modul (`local_infile`, `skip_name_resolve`) sengaja dibiarkan pada nilai default.
 
+## Hardening Hasil Pentest (Black-Box)
+
+- **H1 — Spoofing IP audit trail:** pemakaian `X-Forwarded-For` mentah diganti `req.ip` (hasil `trust proxy 'loopback'`) di `auth.controller.ts`, sehingga IP pada `audit_logs` tidak dapat dipalsukan klien; hanya proxy loopback (Vite) yang dipercaya.
+- **M1 — User enumeration:** pada login, cek `is_active`/`locked_until` dipindah ke **setelah** verifikasi password (`auth.service.ts`). `checkForgotPassword` kini mengembalikan `403 ACCOUNT_LOST_NO_PIN` tunggal untuk kondisi tidak ada/nonaktif/terkunci/portal salah/belum punya PIN; `resetForgotPassword` mengembalikan `400 INVALID_RECOVERY_CREDENTIALS` generik untuk semua kegagalan pra-verifikasi, dengan `SAME_PASSWORD`/`VALIDATION_ERROR` hanya muncul setelah kredensial pemulihan valid.
+- **M2 — Privilege escalation kasir:** `AdminService.updateUserStatus` menolak role selain `admin` dengan `403 FORBIDDEN`, karena permission `user:manage` pada kasir hanya untuk mengelola pelanggan.
+- **M3 — Webhook pembayaran lemah:** signature HMAC-SHA256 kini memakai `PAYMENT_WEBHOOK_SECRET` (min. 32 karakter, wajib) alih-alih secret hardcoded, dibandingkan dengan `crypto.timingSafeEqual` yang aman panjang, dan endpoint `/payments/webhook` diberi rate limiter khusus (60/menit).
+- **L1 — Information disclosure:** `app.disable('x-powered-by')` menghapus header `X-Powered-By`.
+- **L3 — CORS terlalu luas:** allowlist eksplisit `FRONTEND_URL` + `CORS_ALLOWED_ORIGINS`; origin localhost/rentang LAN privat hanya diizinkan bila `CORS_ALLOW_LAN_ORIGINS=true` (default `false`, diaktifkan di `.env` lokal untuk akses LAN rekan).
+- **L4 — CSP longgar:** `connect-src` dibatasi `'self'` di produksi; skema `http/https/ws/wss` hanya di dev.
+- **L5 — Kebocoran memori lockout:** `ProgressiveLockoutService` menambah `lastAttempt` dan membersihkan seluruh entri non-permanen yang basi (24 jam tanpa aktivitas, atau 2 jam setelah kunci berakhir); entri blokir permanen tetap dipertahankan.
+- Variabel `.env` baru: `PAYMENT_WEBHOOK_SECRET`, `CORS_ALLOWED_ORIGINS`, `CORS_ALLOW_LAN_ORIGINS`; `scripts/setup-db.sh`, `.env.example`, `SECURITY.md`, `README.md`, dan `API.md` disinkronkan.
+
+## Brute Force Login Hardening
+
+- **Lockout per-akun (lintas IP)** diaktifkan saat login gagal: `AuthService.login` kini memanggil `userRepo.recordFailedLogin` sehingga distributed attack ke satu akun tetap terkunci, bukan hanya penyerang di satu IP.
+- **Backoff bertingkat, tanpa blokir permanen** (`backend/src/utils/lockout.ts`): 5 gagal → 15 menit, lalu 30 → 60 → 120 → maksimal 240 menit. Menghindari akun asli terkunci selamanya oleh penyerang.
+- **State lockout dipindah ke database**: `ProgressiveLockoutService` tidak lagi memakai `Map` in-memory, melainkan tabel `login_attempts` (migrasi `015_login_attempts.sql`) sehingga tahan restart dan konsisten lintas proses. Entri basi dibersihkan otomatis.
+- **Notifikasi pemilik**: saat akun terkunci, dibuat notifikasi in-app bertipe `security` ("Percobaan Login Mencurigakan") tanpa layanan SMS/email/OTP eksternal. `notifications.type` diperluas ke `ENUM('order','payment','security')`.
+- Test diperbarui: skenario distributed attack (5 IP berbeda) tetap mengunci akun, sementara akun lain tetap bisa login; serta uji backoff bertingkat (15/30/60/120/240) tanpa status permanen.
+- PoC live: 5 login gagal dari 5 IP berbeda → akun terkunci (`users.locked_until` terisi, `login_attempts` mencatat per IP), percobaan ke-6 dengan password benar dari IP lain ditolak `423 ACCOUNT_LOCKED`, dan notifikasi `security` terbuat.
+
 ## Berikutnya
 
 - [x] Pendaftaran pelanggan oleh kasir dengan password sementara ramah manusia (tanpa hardcode).
@@ -133,3 +154,4 @@
 - Enkripsi koneksi database SSL/TLS aktif: backend berhasil connect dengan `DB_SSL=true` dan ditolak saat `DB_SSL=false` (bukti `app_rw REQUIRE SSL` bekerja).
 - Frontend lint, type-check, dan build lulus (`npm run lint && npm run type-check && npm run build`).
 - Backend lint, type-check, dan seluruh 7 test suite (79 test) lulus (`npm run lint && npm run type-check && npm test`).
+- Re-verifikasi PoC pentest pasca-perbaikan: header `X-Powered-By` hilang; `forgot/check` akun tak dikenal → `403 ACCOUNT_LOST_NO_PIN`; `forgot/reset` akun tak dikenal → `400 INVALID_RECOVERY_CREDENTIALS`; webhook signature palsu → `400 INVALID_SIGNATURE`; token kasir ke `PATCH /admin/users/:id` → `403 FORBIDDEN`.

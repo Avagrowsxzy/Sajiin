@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { apiClient } from '../lib/api-client';
 import { formatDate } from '../utils/format';
 import type { AppNotification, PaginatedResponse } from '../types';
-import { Bell, CreditCard, Package } from 'lucide-react';
+import { Bell, CreditCard, Package, ShieldAlert } from 'lucide-react';
 
 const POLL_INTERVAL = 20000; // 20 detik
 
@@ -165,7 +165,7 @@ export function NotificationBell({ orderPathPrefix = '/orders' }: NotificationBe
                 }}
               >
                 <div className="flex items-center gap-1" style={{ marginBottom: '2px' }}>
-                  <span style={{ fontSize: '0.85rem' }}>{n.type === 'payment' ? <CreditCard size={15} /> : <Package size={15} />}</span>
+                  <span style={{ fontSize: '0.85rem' }}>{n.type === 'payment' ? <CreditCard size={15} /> : n.type === 'security' ? <ShieldAlert size={15} /> : <Package size={15} />}</span>
                   <strong style={{ fontSize: '0.85rem' }}>{n.title}</strong>
                   {!n.is_read && (
                     <span

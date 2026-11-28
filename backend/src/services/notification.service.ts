@@ -7,7 +7,7 @@ const notificationRepo = new NotificationRepository();
 
 export interface CreateNotificationInput {
   userId: string;
-  type: 'order' | 'payment';
+  type: 'order' | 'payment' | 'security';
   title: string;
   message: string;
   orderId?: string | null;

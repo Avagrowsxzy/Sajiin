@@ -14,6 +14,7 @@ import {
   normalizeSecurityAnswers,
 } from '../utils/crypto.js';
 import { writeAudit } from './audit.service.js';
+import { writeNotification } from './notification.service.js';
 import { ROLES } from '../types/index.js';
 import { TokenPayload } from '../middleware/auth.middleware.js';
 import { progressiveLockout } from './progressive-lockout.service.js';
@@ -124,19 +125,13 @@ export class AuthService {
   }
 
   /**
-   * Login pengguna (username + password) dengan progressive targeted lockout (IP + Username)
+   * Login pengguna (username + password) dengan lockout per-akun (lintas IP) dan
+   * progressive lockout per kombinasi (IP + Username), keduanya berbasis DB.
    */
   async login(input: LoginInput): Promise<LoginResult> {
-    // 0. Cek targeted progressive lockout per kombinasi IP + Username
-    const targetedLock = progressiveLockout.checkLockout(input.ipAddress, input.username);
+    // 0. Cek lockout per kombinasi IP + Username (disimpan di tabel login_attempts)
+    const targetedLock = await progressiveLockout.checkLockout(input.ipAddress, input.username);
     if (targetedLock.isLocked) {
-      if (targetedLock.isPermanent) {
-        throw {
-          status: 423,
-          code: 'ACCOUNT_LOCKED',
-          message: `Percobaan login untuk akun '${input.username}' dari perangkat ini diblokir permanen karena aktivitas mencurigakan. Hubungi administrator.`,
-        };
-      }
       throw {
         status: 423,
         code: 'ACCOUNT_LOCKED',
@@ -150,7 +145,7 @@ export class AuthService {
     if (!user) {
       // Dummy verify untuk menetralkan timing attack
       await hashPassword('dummy_password_timing_neutralizer');
-      progressiveLockout.recordFailure(input.ipAddress, input.username);
+      await progressiveLockout.recordFailure(input.ipAddress, input.username);
       await writeAudit({
         action: 'AUTH_LOGIN_FAILED',
         entity: 'users',
@@ -165,51 +160,20 @@ export class AuthService {
       };
     }
 
-    // Cek apakah akun dinonaktifkan
-    if (!user.is_active) {
-      throw {
-        status: 403,
-        code: 'ACCOUNT_DISABLED',
-        message: 'Akun Anda dinonaktifkan. Silakan hubungi administrator.',
-      };
-    }
-
-    // Cek apakah akun secara global dikunci di database (admin lock)
-    if (user.locked_until && user.locked_until > new Date()) {
-      const remainingMinutes = Math.ceil(
-        (user.locked_until.getTime() - Date.now()) / (60 * 1000)
-      );
-      throw {
-        status: 423,
-        code: 'ACCOUNT_LOCKED',
-        message: `Akun terkunci sementara karena 5 kali percobaan gagal. Coba lagi dalam ${remainingMinutes} menit.`,
-      };
-    }
+    // Catatan keamanan (Finding M1): status akun (nonaktif/terkunci) TIDAK dicek di sini
+    // agar penyerang tidak bisa membedakan akun ada/tidak tanpa mengetahui password.
+    // Pengecekan dilakukan SETELAH password terverifikasi.
 
     // Verifikasi password
     const isPasswordValid = await verifyPassword(user.password_hash, input.password);
 
     if (!isPasswordValid) {
-      const lockResult = progressiveLockout.recordFailure(input.ipAddress, user.username);
+      // Lockout per-akun (lintas IP) dengan durasi bertingkat.
+      const accountLock = await this.userRepo.recordFailedLogin(user.id);
+      // Lockout per kombinasi (IP + username).
+      const lockResult = await progressiveLockout.recordFailure(input.ipAddress, user.username);
 
-      if (lockResult.isLocked) {
-        if (lockResult.isPermanent) {
-          await writeAudit({
-            actorId: user.id,
-            action: 'AUTH_LOCKED_PERMANENT',
-            entity: 'users',
-            entity_id: user.id,
-            new_value: { username: user.username, ip: input.ipAddress, reason: 'progressive_targeted_lockout_permanent' },
-            ipAddress: input.ipAddress,
-          });
-
-          throw {
-            status: 423,
-            code: 'ACCOUNT_LOCKED',
-            message: `Percobaan login untuk akun '${user.username}' dari perangkat ini telah diblokir permanen karena 20 kali percobaan login gagal. Hubungi administrator.`,
-          };
-        }
-
+      if (accountLock.locked) {
         await writeAudit({
           actorId: user.id,
           action: 'AUTH_LOCKED',
@@ -218,6 +182,31 @@ export class AuthService {
           new_value: {
             username: user.username,
             ip: input.ipAddress,
+            scope: 'account',
+            duration_minutes: accountLock.durationMinutes,
+          },
+          ipAddress: input.ipAddress,
+        });
+
+        await this.notifyAccountLocked(user, accountLock.durationMinutes, input.ipAddress);
+
+        throw {
+          status: 423,
+          code: 'ACCOUNT_LOCKED',
+          message: `Akun terkunci sementara selama ${accountLock.durationMinutes} menit karena terlalu banyak percobaan login gagal. Coba lagi nanti.`,
+        };
+      }
+
+      if (lockResult.isLocked) {
+        await writeAudit({
+          actorId: user.id,
+          action: 'AUTH_LOCKED',
+          entity: 'users',
+          entity_id: user.id,
+          new_value: {
+            username: user.username,
+            ip: input.ipAddress,
+            scope: 'ip',
             duration_minutes: lockResult.durationMinutes,
             failed_attempts: lockResult.failedAttempts,
           },
@@ -227,7 +216,7 @@ export class AuthService {
         throw {
           status: 423,
           code: 'ACCOUNT_LOCKED',
-          message: `Akun telah dikunci selama ${lockResult.durationMinutes} menit karena ${lockResult.failedAttempts} kali percobaan login gagal.`,
+          message: `Terlalu banyak percobaan gagal dari perangkat ini. Coba lagi dalam ${lockResult.durationMinutes} menit.`,
         };
       }
 
@@ -244,6 +233,37 @@ export class AuthService {
         status: 401,
         code: 'INVALID_CREDENTIALS',
         message: 'Username atau password salah',
+      };
+    }
+
+    // Password benar: sekarang aman untuk mengungkap status akun (Finding M1).
+    // Cek apakah akun dinonaktifkan
+    if (!user.is_active) {
+      await writeAudit({
+        actorId: user.id,
+        action: 'AUTH_LOGIN_FAILED',
+        entity: 'users',
+        entity_id: user.id,
+        new_value: { username: user.username, reason: 'account_disabled' },
+        ipAddress: input.ipAddress,
+      });
+
+      throw {
+        status: 403,
+        code: 'ACCOUNT_DISABLED',
+        message: 'Akun Anda dinonaktifkan. Silakan hubungi administrator.',
+      };
+    }
+
+    // Cek apakah akun secara global dikunci di database (admin lock)
+    if (user.locked_until && user.locked_until > new Date()) {
+      const remainingMinutes = Math.ceil(
+        (user.locked_until.getTime() - Date.now()) / (60 * 1000)
+      );
+      throw {
+        status: 423,
+        code: 'ACCOUNT_LOCKED',
+        message: `Akun terkunci sementara karena percobaan login gagal berulang. Coba lagi dalam ${remainingMinutes} menit.`,
       };
     }
 
@@ -271,8 +291,8 @@ export class AuthService {
       user.password_admin_compliant = true;
     }
 
-    // Reset targeted progressive lockout & failed login counter jika sukses login
-    progressiveLockout.recordSuccess(input.ipAddress, user.username);
+    // Reset lockout per (IP + username) & counter kegagalan per-akun jika sukses login
+    await progressiveLockout.recordSuccess(input.ipAddress, user.username);
     await this.userRepo.resetFailedLogin(user.id);
 
     // Cek MFA jika sudah diaktifkan pada akun ini
@@ -615,41 +635,27 @@ export class AuthService {
     portal?: AuthPortal
   ): Promise<{ username: string; role: string; has_pin: boolean; has_questions: boolean }> {
     const user = await this.userRepo.findByUsername(username);
-    if (!user || !user.is_active) {
-      throw {
-        status: 404,
-        code: 'ACCOUNT_NOT_FOUND',
-        message: 'Akun tidak ditemukan atau tidak aktif',
-      };
-    }
 
-    if (user.locked_until && user.locked_until > new Date()) {
-      const remainingMinutes = Math.ceil((user.locked_until.getTime() - Date.now()) / (60 * 1000));
-      throw {
-        status: 423,
-        code: 'ACCOUNT_LOCKED',
-        message: `Akun terkunci sementara karena 5 kali percobaan gagal. Coba lagi dalam ${remainingMinutes} menit.`,
-      };
-    }
+    // Finding M1: jangan bedakan akun tidak ada / nonaktif / terkunci / portal salah / belum punya
+    // PIN. Semua kondisi gagal mengembalikan error generik yang identik agar tidak bisa dienumerasi.
+    const isRecoverable =
+      !!user &&
+      user.is_active &&
+      !(user.locked_until && user.locked_until > new Date()) &&
+      (!portal || isPortalAllowed(user.role_name, portal)) &&
+      !!user.security_pin_hash;
 
-    // Pemulihan juga dipisah per portal agar akun staff tidak bisa direset dari alur publik.
-    if (portal && !isPortalAllowed(user.role_name, portal)) {
-      throw {
-        status: 403,
-        code: 'PORTAL_MISMATCH',
-        message: 'Username atau password salah',
-      };
-    }
-
-    if (!user.security_pin_hash) {
-      await writeAudit({
-        actorId: user.id,
-        action: 'AUTH_RECOVERY_DENIED',
-        entity: 'users',
-        entity_id: user.id,
-        new_value: { reason: 'no_pin_enabled' },
-        ipAddress,
-      });
+    if (!isRecoverable || !user) {
+      if (user) {
+        await writeAudit({
+          actorId: user.id,
+          action: 'AUTH_RECOVERY_DENIED',
+          entity: 'users',
+          entity_id: user.id,
+          new_value: { reason: 'recovery_not_available' },
+          ipAddress,
+        });
+      }
 
       throw {
         status: 403,
@@ -679,55 +685,33 @@ export class AuthService {
     ipAddress?: string | null;
   }): Promise<void> {
     const user = await this.userRepo.findByUsername(input.username);
-    if (!user || !user.is_active) {
-      throw {
-        status: 404,
-        code: 'ACCOUNT_NOT_FOUND',
-        message: 'Akun tidak ditemukan atau tidak aktif',
-      };
-    }
 
-    if (user.locked_until && user.locked_until > new Date()) {
-      const remainingMinutes = Math.ceil((user.locked_until.getTime() - Date.now()) / (60 * 1000));
-      throw {
-        status: 423,
-        code: 'ACCOUNT_LOCKED',
-        message: `Akun terkunci sementara karena 5 kali percobaan gagal. Coba lagi dalam ${remainingMinutes} menit.`,
-      };
-    }
+    // Finding M1: semua kondisi yang membuat pemulihan tidak dapat diproses mengembalikan
+    // error generik yang sama, agar penyerang tidak bisa mengenumerasi akun/status.
+    const cannotProceed =
+      !user ||
+      !user.is_active ||
+      (user.locked_until && user.locked_until > new Date()) ||
+      (input.portal && !isPortalAllowed(user.role_name, input.portal)) ||
+      !user.security_pin_hash ||
+      (input.method === 'questions' && !user.security_answers_hash);
 
-    // Pemulihan juga dipisah per portal agar akun staff tidak bisa direset dari alur publik.
-    if (input.portal && !isPortalAllowed(user.role_name, input.portal)) {
+    if (cannotProceed || !user) {
       throw {
-        status: 403,
-        code: 'PORTAL_MISMATCH',
-        message: 'Username atau password salah',
-      };
-    }
-
-    if (!user.security_pin_hash) {
-      throw {
-        status: 403,
-        code: 'ACCOUNT_LOST_NO_PIN',
-        message: 'Akun belum mengaktifkan PIN keamanan sehingga dinyatakan hilang dan tidak dapat dipulihkan.',
+        status: 400,
+        code: 'INVALID_RECOVERY_CREDENTIALS',
+        message: 'Kredensial pemulihan tidak valid',
       };
     }
 
     let isVerified = false;
     if (input.method === 'pin') {
-      isVerified = Boolean(input.pin && (await verifyPassword(user.security_pin_hash, input.pin)));
+      isVerified = Boolean(input.pin && (await verifyPassword(user.security_pin_hash ?? '', input.pin)));
     } else {
-      if (!user.security_answers_hash) {
-        throw {
-          status: 400,
-          code: 'RECOVERY_QUESTIONS_NOT_SET',
-          message: 'Pertanyaan keamanan belum diatur pada akun ini',
-        };
-      }
       isVerified = Boolean(
         input.security_answers &&
           input.security_answers.length === 3 &&
-          (await verifyPassword(user.security_answers_hash, normalizeSecurityAnswers(input.security_answers)))
+          (await verifyPassword(user.security_answers_hash ?? '', normalizeSecurityAnswers(input.security_answers)))
       );
     }
 
@@ -745,7 +729,7 @@ export class AuthService {
         throw {
           status: 423,
           code: 'ACCOUNT_LOCKED',
-          message: 'Akun telah dikunci selama 15 menit karena 5 kali percobaan gagal.',
+          message: `Akun terkunci sementara selama ${lockResult.durationMinutes ?? 15} menit karena terlalu banyak percobaan gagal. Coba lagi nanti.`,
         };
       }
 
@@ -802,6 +786,29 @@ export class AuthService {
       new_value: { method: input.method },
       ipAddress: input.ipAddress,
     });
+  }
+
+  /**
+   * Beri tahu pemilik akun saat akunnya terkunci karena percobaan login gagal berulang.
+   * Bersifat informatif: kegagalan mengirim notifikasi tidak boleh menggagalkan respons login.
+   */
+  private async notifyAccountLocked(
+    user: UserEntity,
+    durationMinutes?: number,
+    ipAddress?: string | null
+  ): Promise<void> {
+    try {
+      await writeNotification({
+        userId: user.id,
+        type: 'security',
+        title: 'Percobaan Login Mencurigakan',
+        message: `Akun Anda dikunci sementara (${durationMinutes ?? 15} menit) karena terlalu banyak percobaan login gagal${
+          ipAddress ? ` dari ${ipAddress}` : ''
+        }. Jika ini bukan Anda, segera ganti password setelah masa kunci berakhir.`,
+      });
+    } catch {
+      // abaikan: notifikasi hanya informasi tambahan
+    }
   }
 
   /**

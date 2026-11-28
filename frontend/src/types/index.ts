@@ -142,7 +142,7 @@ export interface Payment {
 export interface AppNotification {
   id: string;
   user_id: string;
-  type: 'order' | 'payment';
+  type: 'order' | 'payment' | 'security';
   title: string;
   message: string;
   order_id: string | null;

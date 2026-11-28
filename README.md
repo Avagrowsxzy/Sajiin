@@ -63,8 +63,10 @@ db/ssl/         sertifikat SSL MariaDB, tidak di-commit
    cp .env.example .env
    ```
 
-   Lalu isi credential database, `JWT_SECRET`, dan
-   `FIELD_ENCRYPTION_KEY` pada `.env` sendiri.
+   Lalu isi credential database, `JWT_SECRET`, `FIELD_ENCRYPTION_KEY`, dan
+   `PAYMENT_WEBHOOK_SECRET` (minimal 32 karakter, mis. `openssl rand -hex 32`)
+   pada `.env` sendiri. Sesuaikan `CORS_ALLOWED_ORIGINS` bila frontend diakses
+   dari origin lain, dan set `CORS_ALLOW_LAN_ORIGINS=true` hanya bila perlu akses LAN.
 
 3. Pasang dependency backend dan frontend:
 

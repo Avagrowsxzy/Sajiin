@@ -12,7 +12,7 @@ describe('Auth API Integration Tests', () => {
   afterAll(async () => {
     // Nonaktifkan user tes (app_rw tidak memiliki hak DELETE pada users sesuai least-privilege)
     await appPool.query(
-      'UPDATE users SET is_active = 0 WHERE username LIKE "test_user_%" OR username LIKE "lockout_%" OR username LIKE "nopin_%" OR username LIKE "cand_kasir_%" OR username LIKE "adm_promo_%" OR username LIKE "mfa_user_%"'
+      'UPDATE users SET is_active = 0 WHERE username LIKE "test_user_%" OR username LIKE "lockout_%" OR username LIKE "nopin_%" OR username LIKE "cand_kasir_%" OR username LIKE "adm_promo_%" OR username LIKE "mfa_user_%" OR username LIKE "targeted_%" OR username LIKE "other_%" OR username LIKE "escalation_%"'
     );
   });
 
@@ -137,8 +137,9 @@ describe('Auth API Integration Tests', () => {
       expect(fifthRes.body.error.code).toBe('ACCOUNT_LOCKED');
     });
 
-    it('targeted lockout: mengunci IP penyerang, tetapi IP lain tetap bisa login dengan password benar', async () => {
+    it('per-account lockout: setelah 5 gagal, akun terkunci untuk semua IP, tetapi akun lain tetap bisa login', async () => {
       const username = `targeted_${Date.now()}`;
+      const otherUsername = `other_${Date.now()}`;
       const attackerIp = '192.168.1.50';
       const legitIp = '192.168.1.15';
 
@@ -147,8 +148,13 @@ describe('Auth API Integration Tests', () => {
         username,
         password: testPassword,
       });
+      await request(app).post('/api/v1/auth/register').send({
+        full_name: 'Other User',
+        username: otherUsername,
+        password: testPassword,
+      });
 
-      // Penyerang dari attackerIp salah 5 kali
+      // Penyerang dari attackerIp salah 5 kali -> akun terkunci (per-akun, lintas IP)
       for (let i = 0; i < 5; i++) {
         await request(app)
           .post('/api/v1/auth/login')
@@ -164,68 +170,53 @@ describe('Auth API Integration Tests', () => {
       expect(attackRes.status).toBe(423);
       expect(attackRes.body.error.code).toBe('ACCOUNT_LOCKED');
 
-      // User sah dari legitIp tetap bisa login dengan password benar
+      // IP lain dengan password BENAR tetap ditolak karena akun terkunci (mencegah distributed attack)
       const legitRes = await request(app)
         .post('/api/v1/auth/login')
         .set('X-Forwarded-For', legitIp)
         .send({ username, password: testPassword });
-      expect(legitRes.status).toBe(200);
-      expect(legitRes.body.data.tokens).toBeDefined();
+      expect(legitRes.status).toBe(423);
+      expect(legitRes.body.error.code).toBe('ACCOUNT_LOCKED');
+
+      // Akun lain dari IP penyerang tetap bisa login (bukan blokir IP menyeluruh)
+      const otherRes = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Forwarded-For', attackerIp)
+        .send({ username: otherUsername, password: testPassword });
+      expect(otherRes.status).toBe(200);
+      expect(otherRes.body.data.tokens).toBeDefined();
     });
 
-    it('progressive lockout service: menguji eskalasi tier (15m -> 30m -> 60m -> permanen)', () => {
+    it('progressive lockout service: backoff bertingkat tanpa blokir permanen', async () => {
       const testIp = '10.0.0.99';
-      const testUser = 'escalation_test';
+      const testUser = `escalation_${Date.now()}`;
 
-      // 1-4 fails: belum terkunci
+      // 1-4 gagal: belum terkunci
       for (let i = 1; i <= 4; i++) {
-        const res = progressiveLockout.recordFailure(testIp, testUser);
+        const res = await progressiveLockout.recordFailure(testIp, testUser);
         expect(res.isLocked).toBe(false);
       }
 
-      // 5th fail: Tier 1 (15m)
-      const t1 = progressiveLockout.recordFailure(testIp, testUser);
-      expect(t1.isLocked).toBe(true);
-      expect(t1.durationMinutes).toBe(15);
-      expect(t1.isPermanent).toBeFalsy();
+      // 5 -> 15m, 6 -> 30m, 7 -> 60m, 8 -> 120m, 9+ -> 240m (batas atas)
+      const expected = [
+        { minutes: 15 },
+        { minutes: 30 },
+        { minutes: 60 },
+        { minutes: 120 },
+        { minutes: 240 },
+        { minutes: 240 },
+      ];
 
-      // 6-9 fails (simulasi setelah cooldown selesai)
-      for (let i = 6; i <= 9; i++) {
-        const res = progressiveLockout.recordFailure(testIp, testUser);
-        expect(res.isLocked).toBe(false);
+      for (const step of expected) {
+        const res = await progressiveLockout.recordFailure(testIp, testUser);
+        expect(res.isLocked).toBe(true);
+        expect(res.durationMinutes).toBe(step.minutes);
       }
 
-      // 10th fail: Tier 2 (30m)
-      const t2 = progressiveLockout.recordFailure(testIp, testUser);
-      expect(t2.isLocked).toBe(true);
-      expect(t2.durationMinutes).toBe(30);
-
-      // 11-14 fails
-      for (let i = 11; i <= 14; i++) {
-        const res = progressiveLockout.recordFailure(testIp, testUser);
-        expect(res.isLocked).toBe(false);
-      }
-
-      // 15th fail: Tier 3 (60m)
-      const t3 = progressiveLockout.recordFailure(testIp, testUser);
-      expect(t3.isLocked).toBe(true);
-      expect(t3.durationMinutes).toBe(60);
-
-      // 16-19 fails
-      for (let i = 16; i <= 19; i++) {
-        const res = progressiveLockout.recordFailure(testIp, testUser);
-        expect(res.isLocked).toBe(false);
-      }
-
-      // 20th fail: Tier 4 (permanen)
-      const t4 = progressiveLockout.recordFailure(testIp, testUser);
-      expect(t4.isLocked).toBe(true);
-      expect(t4.isPermanent).toBe(true);
-
-      // Setelah permanen, checkLockout harus tetap mengembalikan permanent lock
-      const check = progressiveLockout.checkLockout(testIp, testUser);
+      // Tidak ada status permanen; checkLockout mengembalikan kunci sementara yang masih aktif.
+      const check = await progressiveLockout.checkLockout(testIp, testUser);
       expect(check.isLocked).toBe(true);
-      expect(check.isPermanent).toBe(true);
+      expect(check.remainingMinutes).toBeGreaterThan(0);
     });
   });
 

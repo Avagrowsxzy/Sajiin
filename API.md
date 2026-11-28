@@ -10,10 +10,13 @@ Autentikasi menggunakan `username` dan password. Username harus unik; email tida
 - `POST /auth/mfa/setup`
 - `POST /auth/mfa/confirm`
 - `POST /auth/mfa/verify`
-- `POST /auth/password/forgot/check` — menerima `portal: customer|staff` (default `customer`).
-- `POST /auth/password/forgot/reset` — menerima `portal: customer|staff` (default `customer`).
+- `POST /auth/password/forgot/check` — menerima `portal: customer|staff` (default `customer`). Mengembalikan `{ username, role, has_pin, has_questions }` hanya untuk akun aktif dengan PIN yang cocok portal. Untuk kondisi lain (tidak ada/nonaktif/terkunci/portal salah/belum punya PIN) server mengembalikan respons generik yang sama: `403 ACCOUNT_LOST_NO_PIN`.
+- `POST /auth/password/forgot/reset` — menerima `portal: customer|staff` (default `customer`). Kegagalan sebelum kredensial pemulihan terverifikasi mengembalikan `400 INVALID_RECOVERY_CREDENTIALS` (generik); `SAME_PASSWORD`/`VALIDATION_ERROR` hanya setelah kredensial valid.
+- `POST /payments/webhook` — tanpa JWT, wajib signature HMAC-SHA256 (`PAYMENT_WEBHOOK_SECRET`) dan dibatasi rate limit. Signature tidak valid → `400 INVALID_SIGNATURE`.
 
 Tidak ada OAuth/social login atau register publik. Akun pelanggan dibuat oleh kasir. Token ditandatangani dengan HMAC-SHA256 Node crypto. Pemisahan portal login (pelanggan vs staff) ditegakkan di server, bukan hanya di UI.
+
+Login dilindungi lockout berlapis: **per-akun lintas IP** dan **per kombinasi IP + username**, keduanya berbasis database dengan durasi bertingkat (15 → 30 → 60 → 120 → maksimal 240 menit, tanpa blokir permanen). Respons saat terkunci: `423 ACCOUNT_LOCKED`. Pemilik akun menerima notifikasi in-app bertipe `security` saat akunnya terkunci.
 
 ## User
 
@@ -38,6 +41,7 @@ Tidak ada OAuth/social login atau register publik. Akun pelanggan dibuat oleh ka
 - `GET /admin/payments`
 - `POST /admin/payments/:id/refund`
 - `POST /admin/customers`
+- `PATCH /admin/users/:id` (admin) — mengubah `is_active`/`unlock`. Hanya role `admin`; role lain (mis. kasir yang punya `user:manage`) mendapat `403 FORBIDDEN`.
 - Admin menu/user/settings endpoints sesuai permission.
 
 Tidak ada endpoint `/audit/*`.

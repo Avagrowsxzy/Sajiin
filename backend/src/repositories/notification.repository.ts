@@ -23,7 +23,7 @@ export class NotificationRepository {
     data: {
       id: string;
       userId: string;
-      type: 'order' | 'payment';
+      type: 'order' | 'payment' | 'security';
       title: string;
       message: string;
       orderId?: string | null;

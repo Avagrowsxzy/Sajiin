@@ -2,6 +2,7 @@ import mysql from 'mysql2/promise';
 import { appPool } from '../config/database.js';
 import { RequestContext, ROLE_NAMES, RoleId } from '../types/index.js';
 import { encryptField, decryptField, hashPhone } from '../utils/crypto.js';
+import { lockDurationMinutes } from '../utils/lockout.js';
 
 export interface UserEntity {
   id: string;
@@ -169,9 +170,13 @@ export class UserRepository {
   }
 
   /**
-   * Catat kegagalan login dan lockout jika sudah 5x gagal berturut-turut (15 menit)
+   * Catat kegagalan login dan kunci akun dengan durasi bertingkat (5 gagal -> 15 menit,
+   * lalu meningkat; tanpa blokir permanen). Lihat utils/lockout.ts.
    */
-  async recordFailedLogin(userId: string, conn?: mysql.Connection): Promise<{ locked: boolean; lockedUntil?: Date }> {
+  async recordFailedLogin(
+    userId: string,
+    conn?: mysql.Connection
+  ): Promise<{ locked: boolean; lockedUntil?: Date; durationMinutes?: number }> {
     const executor = conn || this.pool;
     const [rows] = await executor.query<mysql.RowDataPacket[]>(
       'SELECT failed_login_count FROM users WHERE id = ?',
@@ -181,15 +186,15 @@ export class UserRepository {
     if (rows.length === 0) return { locked: false };
 
     const newCount = (rows[0].failed_login_count || 0) + 1;
+    const durationMinutes = lockDurationMinutes(newCount);
 
-    if (newCount >= 5) {
-      // Kunci 15 menit
-      const lockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+    if (durationMinutes !== null) {
+      const lockedUntil = new Date(Date.now() + durationMinutes * 60 * 1000);
       await executor.query(
         'UPDATE users SET failed_login_count = ?, locked_until = ? WHERE id = ?',
         [newCount, lockedUntil, userId]
       );
-      return { locked: true, lockedUntil };
+      return { locked: true, lockedUntil, durationMinutes };
     }
 
     await executor.query(
