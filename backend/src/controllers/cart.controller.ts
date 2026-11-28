@@ -26,7 +26,8 @@ function serializeCart(cart: { items: Array<{ id: string; menu_item_id: string; 
 
 // Validasi schema
 const setQuantitySchema = z.object({
-  quantity: z.number().int().min(0),
+  // Batas atas mencegah overflow integer di database & nilai tak wajar (Finding N8).
+  quantity: z.number().int().min(0).max(999, 'Jumlah maksimal 999 per item'),
 });
 
 export class CartController {

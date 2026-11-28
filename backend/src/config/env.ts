@@ -77,6 +77,11 @@ const envSchema = z.object({
   PAYMENT_WEBHOOK_SECRET: z
     .string()
     .min(32, 'PAYMENT_WEBHOOK_SECRET must be at least 32 characters'),
+
+  // Kepercayaan header proxy (X-Forwarded-For/Proto) untuk Express `trust proxy` (Finding N7).
+  // Kosong = default aman: produksi tidak mempercayai header apa pun; non-produksi memakai 'loopback'
+  // (di belakang proxy Vite lokal). Isi dengan jumlah hop (mis. "1") atau daftar IP proxy.
+  TRUST_PROXY: z.string().optional(),
 });
 
 function loadEnv() {

@@ -91,10 +91,10 @@
   - Template `.env` pada `scripts/setup-db.sh` menambah `DB_SSL=false` dan `DB_SSL_CA=` sebagai default aman untuk instalasi baru.
 - Pemisahan portal login staff dari login pelanggan (frontend):
   - Login pelanggan tetap memakai modal `AuthModal` dari navbar (UX tidak berubah).
-  - Kasir & Admin kini memakai halaman portal terpisah `StaffLoginPage` yang diakses lewat jalur rahasia `VITE_STAFF_LOGIN_PATH` (default `/sajiin-ops-7f3a/login`) tanpa tautan publik apa pun.
+  - Kasir & Admin memakai halaman portal terpisah `StaffLoginPage` yang diakses lewat jalur rahasia `STAFF_LOGIN_PATH` (default `/sajiin-ops-7f3a/login`) tanpa tautan publik apa pun. (Ronda 3 memindahkannya ke entri build terpisah `staff.html`; lihat bagian "Ronda 3".)
   - Logika autentikasi (login, MFA, setup PIN, lupa password) diekstrak ke hook bersama `hooks/useAuthFlow.ts` dan komponen `components/ui/AuthFlowContent.tsx`, sehingga modal pelanggan dan halaman staff tidak duplikat.
   - `ProtectedRoute` mendapat opsi `concealed`: area `/admin` dan `/kasir` mengembalikan halaman 404 (bukan redirect ke login atau 403) bagi pengguna yang belum login maupun yang tidak berhak, agar keberadaan portal staff tidak terbaca dari luar.
-  - Jalur portal staff didokumentasikan di `frontend/.env.local` dan `frontend/.env.example`.
+  - Jalur portal staff didokumentasikan di `frontend/.env.local` dan `frontend/.env.example` (Ronda 3: menjadi `STAFF_LOGIN_PATH` sisi server).
 - Pemisahan portal login ditegakkan di server (bukan hanya UI):
   - `POST /auth/login`, `POST /auth/password/forgot/check`, dan `POST /auth/password/forgot/reset` menerima field `portal: customer|staff` (default `customer`, sehingga klien lama tetap kompatibel).
   - `AuthService` menolak `403 PORTAL_MISMATCH` bila role akun tidak cocok portal; pengecekan pada login dilakukan setelah password terverifikasi agar tidak membocorkan tipe akun (mencegah user enumeration).
@@ -136,6 +136,28 @@
 - Test diperbarui: skenario distributed attack (5 IP berbeda) tetap mengunci akun, sementara akun lain tetap bisa login; serta uji backoff bertingkat (15/30/60/120/240) tanpa status permanen.
 - PoC live: 5 login gagal dari 5 IP berbeda → akun terkunci (`users.locked_until` terisi, `login_attempts` mencatat per IP), percobaan ke-6 dengan password benar dari IP lain ditolak `423 ACCOUNT_LOCKED`, dan notifikasi `security` terbuat.
 
+## Hardening Hasil Pentest Ronda 2 (Black-Box, N1–N12)
+
+- **N1 — DoS lockout via pemulihan akun:** kegagalan `forgot/reset` tidak lagi memanggil `recordFailedLogin` per-akun. Pemulihan memakai lockout terpisah ber-namespace `recovery:{ip}:{username}` di tabel `login_attempts`, sehingga penyerang tidak bisa mengunci akun staff hanya dengan menebak PIN/jawaban pemulihan.
+- **N2 — Reset counter sebelum MFA:** `AuthService.login` tidak lagi mereset `failed_login_count` dan lockout saat password benar bila akun masih punya MFA. Reset dilakukan hanya setelah `verifyMfa` sukses, mencegah brute-force PIN tanpa konsekuensi lockout.
+- **N3 — Replay `mfa_token`:** `mfa_token` kini membawa klaim `jti` (UUID) dan ditandai sekali pakai secara atomik (`consumeMfaToken`, `INSERT IGNORE` pada `login_attempts`). Pemakaian kedua ditolak `401 INVALID_MFA_TOKEN`.
+- **N4 — Enumerasi via `forgot/check`:** endpoint tidak lagi mengembalikan `username/role/has_pin/has_questions`; hanya `{ min_password_length }` yang diturunkan dari portal klien (`customer=8`, `staff=15`). Frontend (`useAuthFlow.ts`, `AuthFlowContent.tsx`) memakai `minResetLen` dari respons ini alih-alih menyimpulkan role.
+- **N5 — Enumerasi via status lockout:** login yang terkunci (per-akun atau per IP+username) kini membalas `401 INVALID_CREDENTIALS` generik dengan pengaburan waktu (dummy `hashPassword`). Detail `423 ACCOUNT_LOCKED` hanya diberikan setelah password benar.
+- **N6 — Access token hidup setelah ganti sandi:** access token membawa klaim `pv` (sha256 16 karakter dari `password_hash`). Middleware `authenticate` mengambil `password_hash` dan menolak token dengan `pv` tak cocok, sehingga token lama langsung gugur setelah ganti/reset password. Token legacy tanpa `pv` tetap diterima (kedaluwarsa ≤ 15 menit).
+- **N7 — Spoofing `X-Forwarded-For`:** `trust proxy` dipindah dari hardcode `'loopback'` ke resolusi dari env `TRUST_PROXY`; default aman: produksi `false`, non-produksi `loopback`.
+- **N8 — Overflow jumlah keranjang:** `quantity` dibatasi bilangan bulat 0–999 pada schema Zod (`cart.controller.ts`) dan validasi service (`cart.service.ts`), mencegah overflow integer di database.
+- **N9 — Kebocoran field internal:** `SafeUser` dan `toSafeUser` berhenti mengembalikan `failed_login_count` dan `password_admin_compliant`.
+- **N10 — Registrasi publik terbuka:** `POST /auth/register` awalnya digerbang `ALLOW_PUBLIC_REGISTRATION` (default `false`). Ronda 3 kemudian **menghapus total** rute/controller/skema-nya; akun pelanggan hanya dibuat oleh kasir/admin lewat `adminService.register` (`POST /admin/customers`).
+- **N11 — Ekspos kode sumber/env dev server Vite:** dev server menyajikan kode sumber mentah dan `import.meta.env` (termasuk `VITE_STAFF_LOGIN_PATH`) bila diikat ke LAN. `frontend/vite.config.ts` menegaskan host default `127.0.0.1` dan menambah `server.fs.deny` untuk `.env*`, `*.pem`, `*.key`, `*.crt`, `*.p12`, dan `.git`. Ronda 3 memindahkan portal staff ke entri build terpisah agar jalurnya tidak ada di bundel publik. Kontrol sesungguhnya tetap RBAC di server.
+- **N12 — Hitungan kegagalan tidak atomik:** `recordFailedLogin` memakai `failed_login_count = failed_login_count + 1` di database, lalu membaca ulang untuk menentukan lockout.
+- Variabel `.env` baru: `TRUST_PROXY`; `.env.example`, `scripts/setup-db.sh`, `API.md`, dan `SECURITY.md` disinkronkan. Tanpa migrasi baru (tabel `login_attempts` dipakai ulang dengan prefix `attempt_key`).
+
+### Ronda 3 — Tindak Lanjut N10 & N11
+
+- **N10 — Hapus total endpoint registrasi publik:** rute `POST /auth/register` di `backend/src/routes/auth.routes.ts`, method `AuthController.register`, skema `registerSchema`/`phoneSchema`/`fullNameSchema`, dan env `ALLOW_PUBLIC_REGISTRATION` (termasuk di `backend/package.json`, `.env.example`, `scripts/setup-db.sh`) dihapus. Permintaan ke `/auth/register` kini `404`. `AuthService.register` tetap ada karena dipakai pembuatan pelanggan oleh kasir/admin. Test beralih memakai helper `createTestUser()` yang memanggil `AuthService.register` langsung, plus satu test baru yang memastikan endpoint lama `404`.
+- **N11 — Portal staff di entri build terpisah (opsi C):** `frontend/staff.html` + `frontend/src/staff-main.tsx` menjadi entri Vite kedua (`build.rollupOptions.input`), memuat `AuthProvider` + `ToastProvider` + `BrowserRouter` + `StaffLoginPage`. Rute dan konstanta `VITE_STAFF_LOGIN_PATH` di `frontend/src/App.tsx` dihapus, sehingga `StaffLoginPage` tidak lagi ada di bundel publik. Plugin `sajiin-staff-entry` di `frontend/vite.config.ts` membaca `STAFF_LOGIN_PATH` sisi server (bukan `VITE_*`, via `loadEnv` prefix `''`) dan me-rewrite jalur rahasia → `/staff.html` pada `configureServer` dan `configurePreviewServer`; permintaan langsung ke `/staff.html` dibalas `404`. Setelah login staff, halaman melakukan muat ulang penuh ke dashboard sesuai role (`redirect` opsional di `useAuthFlow`).
+- Verifikasi Ronda 3: build menghasilkan `dist/index.html` (hanya `main-*.js`) dan `dist/staff.html` (`staff-*.js`); `grep -r "sajiin-ops" frontend/dist/` kosong. Preview & dev diuji: jalur rahasia → `200` (mengembalikan `staff.html`/`staff-main.tsx`), `/staff.html` langsung → `404`, `/admin/dashboard` → `200` (fallback SPA ke `index.html`).
+
 ## Berikutnya
 
 - [x] Pendaftaran pelanggan oleh kasir dengan password sementara ramah manusia (tanpa hardcode).
@@ -153,5 +175,6 @@
 - Hardening database terverifikasi setelah `systemctl restart mariadb`: `max_connections = 50`, `bind_address = 127.0.0.1`, `port = 3308`, `simple_password_check` `ACTIVE` dengan nilai `8/1/1/1`, dan socket hanya `127.0.0.1:3308`.
 - Enkripsi koneksi database SSL/TLS aktif: backend berhasil connect dengan `DB_SSL=true` dan ditolak saat `DB_SSL=false` (bukti `app_rw REQUIRE SSL` bekerja).
 - Frontend lint, type-check, dan build lulus (`npm run lint && npm run type-check && npm run build`).
-- Backend lint, type-check, dan seluruh 7 test suite (79 test) lulus (`npm run lint && npm run type-check && npm test`).
+- Backend lint, type-check, dan seluruh 7 test suite (80 test) lulus (`npm run lint && npm run type-check && npm test`).
 - Re-verifikasi PoC pentest pasca-perbaikan: header `X-Powered-By` hilang; `forgot/check` akun tak dikenal → `403 ACCOUNT_LOST_NO_PIN`; `forgot/reset` akun tak dikenal → `400 INVALID_RECOVERY_CREDENTIALS`; webhook signature palsu → `400 INVALID_SIGNATURE`; token kasir ke `PATCH /admin/users/:id` → `403 FORBIDDEN`.
+- Ronda 2 (N1–N12) terverifikasi: `backend npm run lint/type-check/test` lulus (79 test, 7 suite — kini 80 test setelah Ronda 3) dan `frontend npm run lint/type-check/build` lulus. PoC live terhadap instance terpisah (`NODE_ENV=test`, `TRUST_PROXY=false`) 11/11 lulus: register `404`; `forgot/check` seragam `{min_password_length}` (8/15); lockout login `401` generik & `423` hanya setelah password benar; recovery gagal tidak mengunci login dan tidak menaikkan `failed_login_count`; replay `mfa_token` `401 INVALID_MFA_TOKEN`; salah PIN menaikkan counter 1→5 lalu `423`; `SafeUser` tanpa field internal; token lama `401` setelah ganti password; quantity `2147483648`/`1000` → `400` & `999` → `200`; 8 login paralel → `failed_login_count=8` (atomik); `X-Forwarded-For` diabaikan (`login_attempts` menyimpan `127.0.0.1:poc_xff`).

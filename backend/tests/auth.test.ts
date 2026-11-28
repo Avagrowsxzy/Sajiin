@@ -2,12 +2,25 @@ import request from 'supertest';
 import { app } from '../src/index.js';
 import { appPool } from '../src/config/database.js';
 import { progressiveLockout } from '../src/services/progressive-lockout.service.js';
+import { AuthService } from '../src/services/auth.service.js';
 
 describe('Auth API Integration Tests', () => {
   const testUsername = `test_user_${Date.now()}`;
   const testPassword = 'StrongPassword123!';
+  const authService = new AuthService();
   let accessToken: string;
   let refreshToken: string;
+
+  // Finding N10: endpoint registrasi publik dihapus. Akun pelanggan kini hanya dibuat oleh
+  // kasir/admin (lewat POST /admin/customers) atau, di dalam test, langsung lewat AuthService.register.
+  function createTestUser(overrides: { username: string; full_name?: string; password?: string; phone?: string | null }) {
+    return authService.register({
+      full_name: overrides.full_name ?? 'Test User',
+      username: overrides.username,
+      password: overrides.password ?? testPassword,
+      phone: overrides.phone,
+    });
+  }
 
   afterAll(async () => {
     // Nonaktifkan user tes (app_rw tidak memiliki hak DELETE pada users sesuai least-privilege)
@@ -16,60 +29,54 @@ describe('Auth API Integration Tests', () => {
     );
   });
 
-  describe('POST /api/v1/auth/register', () => {
+  describe('AuthService.register (pembuatan akun pelanggan internal)', () => {
     it('harus menolak pendaftaran jika password kurang dari 8 karakter atau tidak memenuhi kompleksitas', async () => {
-      const res = await request(app).post('/api/v1/auth/register').send({
-        full_name: 'Short Pass',
-        username: `short_${Date.now()}`,
-        password: 'short',
-      });
+      await expect(
+        createTestUser({ full_name: 'Short Pass', username: `short_${Date.now()}`, password: 'short' })
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
 
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('VALIDATION_ERROR');
-
-      const noSymbolRes = await request(app).post('/api/v1/auth/register').send({
-        full_name: 'No Symbol',
-        username: `nosym_${Date.now()}`,
-        password: 'Password1234',
-      });
-      expect(noSymbolRes.status).toBe(400);
-      expect(noSymbolRes.body.error.code).toBe('VALIDATION_ERROR');
+      await expect(
+        createTestUser({ full_name: 'No Symbol', username: `nosym_${Date.now()}`, password: 'Password1234' })
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     });
 
     it('harus berhasil mendaftarkan user baru dengan role default user (role_id: 2)', async () => {
-      const res = await request(app).post('/api/v1/auth/register').send({
+      const result = await createTestUser({
         full_name: 'Budi Santoso',
         username: testUsername,
-        password: testPassword,
         phone: '081234567890',
       });
 
-      expect(res.status).toBe(201);
-      expect(res.body.data.user).toBeDefined();
-      expect(res.body.data.user.username).toBe(testUsername);
-      expect(res.body.data.user.role_id).toBe(2);
-      expect(res.body.data.user.role_name).toBe('user');
+      expect(result.user).toBeDefined();
+      expect(result.user.username).toBe(testUsername);
+      expect(result.user.role_id).toBe(2);
+      expect(result.user.role_name).toBe('user');
       // Keamanan: Pastikan hash password atau mfa_secret tidak bocor ke klien
-      expect(res.body.data.user.password_hash).toBeUndefined();
-      expect(res.body.data.user.mfa_secret).toBeUndefined();
+      expect((result.user as Record<string, unknown>).password_hash).toBeUndefined();
+      expect((result.user as Record<string, unknown>).mfa_secret).toBeUndefined();
 
-      expect(res.body.data.tokens).toBeDefined();
-      expect(res.body.data.tokens.access_token).toBeDefined();
-      expect(res.body.data.tokens.refresh_token).toBeDefined();
+      expect(result.tokens).toBeDefined();
+      expect(result.tokens.access_token).toBeDefined();
+      expect(result.tokens.refresh_token).toBeDefined();
 
-      accessToken = res.body.data.tokens.access_token;
-      refreshToken = res.body.data.tokens.refresh_token;
+      accessToken = result.tokens.access_token;
+      refreshToken = result.tokens.refresh_token;
     });
 
     it('harus menolak pendaftaran jika username sudah terdaftar', async () => {
+      await expect(
+        createTestUser({ full_name: 'Budi Duplikat', username: testUsername })
+      ).rejects.toMatchObject({ code: 'USERNAME_ALREADY_EXISTS' });
+    });
+
+    it('harus mengembalikan 404 untuk endpoint registrasi publik yang sudah dihapus (Finding N10)', async () => {
       const res = await request(app).post('/api/v1/auth/register').send({
-        full_name: 'Budi Duplikat',
-        username: testUsername,
+        full_name: 'Publik User',
+        username: `publik_${Date.now()}`,
         password: testPassword,
       });
 
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('USERNAME_ALREADY_EXISTS');
+      expect(res.status).toBe(404);
     });
   });
 
@@ -113,11 +120,7 @@ describe('Auth API Integration Tests', () => {
     it('harus mengunci akun setelah 5 kali gagal login (lockout 15 menit)', async () => {
       const lockUsername = `lockout_${Date.now()}`;
       // Buat akun baru untuk tes lockout
-      await request(app).post('/api/v1/auth/register').send({
-        full_name: 'Lockout User',
-        username: lockUsername,
-        password: testPassword,
-      });
+      await createTestUser({ full_name: 'Lockout User', username: lockUsername });
 
       // 4 kali salah
       for (let i = 0; i < 4; i++) {
@@ -128,13 +131,13 @@ describe('Auth API Integration Tests', () => {
         expect(failRes.status).toBe(401);
       }
 
-      // Percobaan ke-5 -> mengunci akun
+      // Percobaan ke-5 -> akun terkunci, tetapi respons tetap generik (anti-enumerasi, Finding N5)
       const fifthRes = await request(app).post('/api/v1/auth/login').send({
         username: lockUsername,
         password: 'WrongPassword!',
       });
-      expect(fifthRes.status).toBe(423);
-      expect(fifthRes.body.error.code).toBe('ACCOUNT_LOCKED');
+      expect(fifthRes.status).toBe(401);
+      expect(fifthRes.body.error.code).toBe('INVALID_CREDENTIALS');
     });
 
     it('per-account lockout: setelah 5 gagal, akun terkunci untuk semua IP, tetapi akun lain tetap bisa login', async () => {
@@ -143,16 +146,8 @@ describe('Auth API Integration Tests', () => {
       const attackerIp = '192.168.1.50';
       const legitIp = '192.168.1.15';
 
-      await request(app).post('/api/v1/auth/register').send({
-        full_name: 'Targeted User',
-        username,
-        password: testPassword,
-      });
-      await request(app).post('/api/v1/auth/register').send({
-        full_name: 'Other User',
-        username: otherUsername,
-        password: testPassword,
-      });
+      await createTestUser({ full_name: 'Targeted User', username });
+      await createTestUser({ full_name: 'Other User', username: otherUsername });
 
       // Penyerang dari attackerIp salah 5 kali -> akun terkunci (per-akun, lintas IP)
       for (let i = 0; i < 5; i++) {
@@ -162,13 +157,13 @@ describe('Auth API Integration Tests', () => {
           .send({ username, password: 'WrongPassword!' });
       }
 
-      // Penyerang ditolak 423
+      // Penyerang tetap menerima respons generik (anti-enumerasi, Finding N5)
       const attackRes = await request(app)
         .post('/api/v1/auth/login')
         .set('X-Forwarded-For', attackerIp)
         .send({ username, password: 'WrongPassword!' });
-      expect(attackRes.status).toBe(423);
-      expect(attackRes.body.error.code).toBe('ACCOUNT_LOCKED');
+      expect(attackRes.status).toBe(401);
+      expect(attackRes.body.error.code).toBe('INVALID_CREDENTIALS');
 
       // IP lain dengan password BENAR tetap ditolak karena akun terkunci (mencegah distributed attack)
       const legitRes = await request(app)
@@ -320,13 +315,9 @@ describe('Auth API Integration Tests', () => {
 
     it('harus mendaftarkan user baru untuk tes MFA', async () => {
       mfaUsername = `mfa_user_${Date.now()}`;
-      const res = await request(app).post('/api/v1/auth/register').send({
-        full_name: 'MFA User',
-        username: mfaUsername,
-        password: testPassword,
-      });
-      expect(res.status).toBe(201);
-      mfaAccessToken = res.body.data.tokens.access_token;
+      const result = await createTestUser({ full_name: 'MFA User', username: mfaUsername });
+      mfaAccessToken = result.tokens.access_token;
+      expect(mfaAccessToken).toBeDefined();
     });
 
     it('POST /auth/mfa/setup: harus membuat secret dan QR code', async () => {
@@ -384,19 +375,28 @@ describe('Auth API Integration Tests', () => {
       expect(successRes.body.data.user.has_mfa).toBe(true);
     });
 
-    it('Lupa Password: akun tanpa PIN dinyatakan hilang (ACCOUNT_LOST_NO_PIN)', async () => {
+    it('Lupa Password: cek akun tidak membocorkan status akun (Finding N4)', async () => {
       const noPinUser = `nopin_${Date.now()}`;
-      await request(app).post('/api/v1/auth/register').send({
-        full_name: 'No Pin User',
-        username: noPinUser,
-        password: testPassword,
-      });
+      await createTestUser({ full_name: 'No Pin User', username: noPinUser });
 
+      // Respons sekarang seragam: tidak menyebut akun ada/tidak, role, atau status PIN.
       const checkRes = await request(app).post('/api/v1/auth/password/forgot/check').send({
         username: noPinUser,
       });
-      expect(checkRes.status).toBe(403);
-      expect(checkRes.body.error.code).toBe('ACCOUNT_LOST_NO_PIN');
+      expect(checkRes.status).toBe(200);
+      expect(checkRes.body.data.min_password_length).toBe(8);
+      expect(checkRes.body.data.has_pin).toBeUndefined();
+      expect(checkRes.body.data.role).toBeUndefined();
+
+      // Reset tetap gagal dengan error generik yang sama untuk akun tanpa PIN.
+      const resetRes = await request(app).post('/api/v1/auth/password/forgot/reset').send({
+        username: noPinUser,
+        method: 'pin',
+        pin: '123456',
+        new_password: 'WhateverStrong123!',
+      });
+      expect(resetRes.status).toBe(400);
+      expect(resetRes.body.error.code).toBe('INVALID_RECOVERY_CREDENTIALS');
     });
 
     it('Lupa Password: akun dengan PIN dapat reset password via PIN maupun 3 pertanyaan keamanan, dan menolak password lama', async () => {
@@ -404,8 +404,7 @@ describe('Auth API Integration Tests', () => {
         username: mfaUsername,
       });
       expect(checkRes.status).toBe(200);
-      expect(checkRes.body.data.has_pin).toBe(true);
-      expect(checkRes.body.data.has_questions).toBe(true);
+      expect(checkRes.body.data.min_password_length).toBe(8);
 
       // 1. Tolak jika password baru sama dengan password lama
       const samePassRes = await request(app).post('/api/v1/auth/password/forgot/reset').send({

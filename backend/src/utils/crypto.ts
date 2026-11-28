@@ -111,6 +111,14 @@ export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+/**
+ * Sidik jari singkat dari password hash untuk mengikat access token ke versi password saat ini.
+ * Dipakai agar access token lama otomatis gugur setelah password diganti/direset (Finding N6).
+ */
+export function passwordFingerprint(passwordHash: string): string {
+  return crypto.createHash('sha256').update(passwordHash).digest('hex').slice(0, 16);
+}
+
 export function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, '');
   if (digits.startsWith('0')) return `62${digits.slice(1)}`;

@@ -11,4 +11,4 @@
 - Pembayaran transfer menampilkan instruksi rekening dan upload bukti; kasir melihat serta memvalidasi.
 - Semua halaman data memiliki loading, error, dan empty state.
 - Aksi berisiko memakai dialog konfirmasi dan hasilnya memakai toast.
-- Login pelanggan tetap lewat modal dari navbar; Kasir & Admin memakai portal terpisah di jalur rahasia `VITE_STAFF_LOGIN_PATH` (tanpa tautan publik). Area `/admin` dan `/kasir` mengembalikan halaman 404 bila diakses tanpa hak, sehingga keberadaan portal staff tidak terbaca dari luar.
+- Login pelanggan tetap lewat modal dari navbar; Kasir & Admin memakai portal terpisah yang berada di entri build sendiri (`staff.html`) dan hanya dapat dibuka lewat jalur rahasia sisi server `STAFF_LOGIN_PATH` (tanpa tautan publik, dan permintaan langsung ke `/staff.html` dibalas 404). Area `/admin` dan `/kasir` mengembalikan halaman 404 bila diakses tanpa hak, sehingga keberadaan portal staff tidak terbaca dari luar.

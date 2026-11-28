@@ -11,7 +11,6 @@ import { AdminLayout } from './layouts/AdminLayout';
 // Public & Auth Pages
 import { HomePage } from './pages/HomePage';
 import { NotFoundPage, ForbiddenPage } from './pages/ErrorPages';
-import { StaffLoginPage } from './pages/StaffLoginPage';
 
 // User Pages
 import { MenuPage } from './pages/user/MenuPage';
@@ -33,9 +32,6 @@ import { AdminPaymentSettingsPage } from './pages/admin/AdminPaymentSettingsPage
 import { KasirDashboardPage } from './pages/kasir/KasirDashboardPage';
 import { KasirCustomersPage } from './pages/kasir/KasirCustomersPage';
 import { KasirLayout } from './layouts/KasirLayout';
-
-// Jalur portal staff diambil dari env agar tidak tampil di dokumen/kode publik.
-const STAFF_LOGIN_PATH = import.meta.env.VITE_STAFF_LOGIN_PATH || '/staff/login';
 
 function RootRedirect() {
   const { user, loading } = useAuth();
@@ -82,8 +78,8 @@ export function AppRoutes() {
         <Route path="/profile" element={<ProfilePage />} />
       </Route>
 
-      {/* Portal login staff (Kasir & Admin) — hanya via URL rahasia, tanpa tautan publik */}
-      <Route path={STAFF_LOGIN_PATH} element={<StaffLoginPage />} />
+      {/* Portal login staff (Kasir & Admin) kini berada di entri build terpisah `staff.html`
+          (Finding N11), sehingga tidak ada rute/jalur portal di bundel publik ini. */}
 
       {/* Protected Admin Routes */}
       <Route

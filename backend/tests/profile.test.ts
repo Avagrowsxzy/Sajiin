@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { app } from '../src/index.js';
 import { appPool } from '../src/config/database.js';
+import { AuthService } from '../src/services/auth.service.js';
 import crypto from 'crypto';
 
 describe('Profile & Cart API Integration Tests', () => {
@@ -10,9 +11,10 @@ describe('Profile & Cart API Integration Tests', () => {
   const username = `profile_${Date.now()}`;
 
   beforeAll(async () => {
-    const response = await request(app).post('/api/v1/auth/register').send({ full_name: 'Profile User', username, password: 'StrongPassword123!' });
-    userId = response.body.data.user.id;
-    userToken = response.body.data.tokens.access_token;
+    // Finding N10: registrasi publik dihapus; buat akun fixture langsung lewat AuthService.register.
+    const created = await new AuthService().register({ full_name: 'Profile User', username, password: 'StrongPassword123!' });
+    userId = created.user.id;
+    userToken = created.tokens.access_token;
     const [category] = await appPool.query<any>('INSERT INTO categories (name) VALUES (?)', [`Profile ${Date.now()}`]);
     menuItemId = crypto.randomUUID();
     await appPool.query(`INSERT INTO menu_items (id, category_id, name, description, price, stock, is_available) VALUES (?, ?, 'Profile Menu', 'Fixture', 15000, 20, 1)`, [menuItemId, category.insertId]);

@@ -126,6 +126,8 @@ FIELD_ENCRYPTION_KEY=${FIELD_KEY}
 # === Server ===
 PORT=3000
 NODE_ENV=development
+# Kosong = default aman (produksi tanpa proxy tepercaya, non-produksi 'loopback').
+TRUST_PROXY=
 
 # === Frontend URL (CORS) ===
 FRONTEND_URL=http://localhost:5173

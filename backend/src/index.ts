@@ -19,8 +19,22 @@ const orderService = new OrderService();
 // Sembunyikan teknologi server (Finding L1).
 app.disable('x-powered-by');
 
-// Trust only the local Vite proxy so req.ip resolves the original LAN client.
-app.set('trust proxy', 'loopback');
+// Kepercayaan header proxy dikendalikan env (Finding N7). Default aman: produksi tidak mempercayai
+// header apa pun (mencegah spoofing `X-Forwarded-For` untuk memintas rate limit/lockout); non-produksi
+// memakai 'loopback' karena berada di belakang proxy Vite lokal.
+function resolveTrustProxy(): boolean | number | string {
+  const raw = env.TRUST_PROXY?.trim();
+  if (raw) {
+    const lower = raw.toLowerCase();
+    if (lower === 'false' || lower === '0') return false;
+    if (lower === 'true') return true;
+    if (/^\d+$/.test(raw)) return Number(raw);
+    return raw; // 'loopback' atau daftar IP dipisah koma
+  }
+  return env.NODE_ENV === 'production' ? false : 'loopback';
+}
+
+app.set('trust proxy', resolveTrustProxy());
 
 // Allowlist origin eksplisit (CORS_ALLOWED_ORIGINS, dipisah koma) + FRONTEND_URL.
 const explicitCorsOrigins = env.CORS_ALLOWED_ORIGINS

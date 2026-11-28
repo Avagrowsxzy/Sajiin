@@ -51,6 +51,15 @@ export class CartService {
       };
     }
 
+    // Batas atas mencegah overflow integer di database & nilai tak wajar (Finding N8).
+    if (quantity > 999) {
+      throw {
+        status: 400,
+        code: 'INVALID_QUANTITY',
+        message: 'Jumlah maksimal 999 per item',
+      };
+    }
+
     // Jika quantity = 0, tidak perlu validasi menu (hanya hapus)
     if (quantity > 0) {
       // Cek menu exists dan available

@@ -25,7 +25,12 @@ export interface UserEntity {
 
 export type SafeUser = Omit<
   UserEntity,
-  'password_hash' | 'mfa_secret' | 'security_pin_hash' | 'security_answers_hash'
+  | 'password_hash'
+  | 'mfa_secret'
+  | 'security_pin_hash'
+  | 'security_answers_hash'
+  | 'failed_login_count'
+  | 'password_admin_compliant'
 > & {
   has_mfa: boolean;
 };
@@ -172,12 +177,20 @@ export class UserRepository {
   /**
    * Catat kegagalan login dan kunci akun dengan durasi bertingkat (5 gagal -> 15 menit,
    * lalu meningkat; tanpa blokir permanen). Lihat utils/lockout.ts.
+   * Inkrement dilakukan atomik di database (Finding N12) agar akurat saat request paralel.
    */
   async recordFailedLogin(
     userId: string,
     conn?: mysql.Connection
   ): Promise<{ locked: boolean; lockedUntil?: Date; durationMinutes?: number }> {
     const executor = conn || this.pool;
+
+    // Inkrement atomik: tidak lagi baca-lalu-tulis.
+    await executor.query(
+      'UPDATE users SET failed_login_count = failed_login_count + 1 WHERE id = ?',
+      [userId]
+    );
+
     const [rows] = await executor.query<mysql.RowDataPacket[]>(
       'SELECT failed_login_count FROM users WHERE id = ?',
       [userId]
@@ -185,22 +198,18 @@ export class UserRepository {
 
     if (rows.length === 0) return { locked: false };
 
-    const newCount = (rows[0].failed_login_count || 0) + 1;
+    const newCount = Number(rows[0].failed_login_count) || 0;
     const durationMinutes = lockDurationMinutes(newCount);
 
     if (durationMinutes !== null) {
       const lockedUntil = new Date(Date.now() + durationMinutes * 60 * 1000);
       await executor.query(
-        'UPDATE users SET failed_login_count = ?, locked_until = ? WHERE id = ?',
-        [newCount, lockedUntil, userId]
+        'UPDATE users SET locked_until = ? WHERE id = ?',
+        [lockedUntil, userId]
       );
       return { locked: true, lockedUntil, durationMinutes };
     }
 
-    await executor.query(
-      'UPDATE users SET failed_login_count = ? WHERE id = ?',
-      [newCount, userId]
-    );
     return { locked: false };
   }
 
@@ -255,12 +264,10 @@ export class UserRepository {
       username: user.username,
       phone: user.phone,
       is_active: user.is_active,
-      failed_login_count: user.failed_login_count,
       locked_until: user.locked_until,
       created_at: user.created_at,
       updated_at: user.updated_at,
       has_mfa: !!user.security_pin_hash,
-      password_admin_compliant: user.password_admin_compliant,
     };
   }
 

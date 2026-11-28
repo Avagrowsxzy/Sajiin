@@ -33,7 +33,7 @@ export function AuthFlowContent({ flow, variant = 'customer' }: AuthFlowContentP
     setLoginForm,
     forgotUsername,
     setForgotUsername,
-    forgotRole,
+    minResetLen,
     recoveryMethod,
     setRecoveryMethod,
     recoveryPin,
@@ -51,8 +51,6 @@ export function AuthFlowContent({ flow, variant = 'customer' }: AuthFlowContentP
     handleForgotCheck,
     handleForgotReset,
   } = flow;
-
-  const minResetLen = forgotRole === 'admin' || forgotRole === 'kasir' ? 15 : 8;
 
   return (
     <>

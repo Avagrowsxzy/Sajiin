@@ -7,40 +7,6 @@ import { TokenPayload } from '../middleware/auth.middleware.js';
 
 const authService = new AuthService();
 
-const phoneSchema = z
-  .string()
-  .trim()
-  .refine(
-    (val) => val === '' || /^(08[0-9]{8,11}|628[0-9]{8,11})$/.test(val),
-    'Nomor telepon harus berupa angka diawali 08 atau 628 (10-13 digit, tanpa tanda +)'
-  )
-  .transform((val) => (val === '' ? null : val))
-  .optional()
-  .nullable();
-
-const fullNameSchema = z
-  .string()
-  .trim()
-  .min(2, 'Nama lengkap minimal 2 karakter')
-  .max(100, 'Nama lengkap maksimal 100 karakter')
-  .regex(/^[a-zA-Z0-9\s.,'()-]+$/, 'Nama hanya boleh berisi huruf, angka, spasi, dan tanda baca umum');
-
-// Skema validasi Zod
-const registerSchema = z.object({
-  full_name: fullNameSchema,
-  username: z
-    .string()
-    .trim()
-    .min(3, 'Username minimal 3 karakter')
-    .max(50, 'Username maksimal 50 karakter')
-    .regex(/^[a-zA-Z0-9._-]+$/, 'Username hanya boleh berisi huruf, angka, titik, garis bawah, atau strip'),
-  password: z
-    .string()
-    .min(8, 'Password minimal 8 karakter')
-    .max(128),
-  phone: phoneSchema,
-});
-
 const loginSchema = z.object({
   username: z.string().trim().min(1, 'Username wajib diisi'),
   password: z.string().min(1, 'Password wajib diisi'),
@@ -101,32 +67,6 @@ const forgotResetSchema = z.object({
 });
 
 export class AuthController {
-  async register(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const parsed = registerSchema.safeParse(req.body);
-      if (!parsed.success) {
-        res.status(400).json({
-          error: {
-            code: 'VALIDATION_ERROR',
-            message: parsed.error.errors[0]?.message || 'Input tidak valid',
-          },
-        });
-        return;
-      }
-
-      const result = await authService.register({
-        ...parsed.data,
-        ipAddress: req.ip,
-      });
-
-      res.status(201).json({
-        data: result,
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-
   async login(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const parsed = loginSchema.safeParse(req.body);
@@ -140,7 +80,8 @@ export class AuthController {
         return;
       }
 
-      // Gunakan req.ip (hasil trust proxy 'loopback') agar tidak bisa dipalsukan via header X-Forwarded-For (Finding H1).
+      // Gunakan req.ip (hasil `trust proxy` yang dikendalikan env) agar tidak bisa dipalsukan via
+      // header X-Forwarded-For mentah (Finding H1/N7).
       const clientIp = req.ip || req.socket.remoteAddress;
       const result = await authService.login({
         ...parsed.data,
@@ -368,7 +309,7 @@ export class AuthController {
         return;
       }
 
-      const result = await authService.checkForgotPassword(parsed.data.username, req.ip, parsed.data.portal);
+      const result = await authService.checkForgotPassword(parsed.data.portal);
       res.status(200).json({ data: result });
     } catch (err) {
       next(err);

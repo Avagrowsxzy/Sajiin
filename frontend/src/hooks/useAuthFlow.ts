@@ -17,16 +17,30 @@ interface UseAuthFlowOptions {
   onSuccess?: () => void;
   /** Portal yang dipakai: pelanggan (customer) atau staff. Ditegakkan juga di server. */
   portal?: 'customer' | 'staff';
+  /**
+   * Cara berpindah setelah autentikasi berhasil. Default: navigasi SPA ke dashboard sesuai role.
+   * Portal staff memakai entri build terpisah, jadi ia mengeset ini ke muat-ulang penuh (full reload)
+   * agar berpindah dari berkas staff ke aplikasi utama.
+   */
+  redirect?: (role: string) => void;
 }
 
 /**
  * Logika alur autentikasi (login, MFA, setup PIN, lupa password) yang dipakai bersama
  * oleh modal pelanggan (AuthModal) dan halaman portal staff (StaffLoginPage).
  */
-export function useAuthFlow({ onSuccess, portal = 'customer' }: UseAuthFlowOptions = {}) {
+export function useAuthFlow({ onSuccess, portal = 'customer', redirect }: UseAuthFlowOptions = {}) {
   const { login, verifyMfa, completeMfaSetup } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
+
+  const goToRole = useCallback(
+    (role: string) => {
+      if (redirect) redirect(role);
+      else navigate(redirectForRole(role));
+    },
+    [redirect, navigate]
+  );
 
   const [mode, setMode] = useState<AuthMode>('login');
   const [loading, setLoading] = useState(false);
@@ -39,7 +53,7 @@ export function useAuthFlow({ onSuccess, portal = 'customer' }: UseAuthFlowOptio
 
   // Lupa password
   const [forgotUsername, setForgotUsername] = useState('');
-  const [forgotRole, setForgotRole] = useState<string>('user');
+  const [minResetLen, setMinResetLen] = useState<number>(8);
   const [recoveryMethod, setRecoveryMethod] = useState<'pin' | 'questions'>('pin');
   const [recoveryPin, setRecoveryPin] = useState('');
   const [recoveryAnswers, setRecoveryAnswers] = useState<[string, string, string]>(['', '', '']);
@@ -77,7 +91,7 @@ export function useAuthFlow({ onSuccess, portal = 'customer' }: UseAuthFlowOptio
       if ('user' in result) {
         toast.success('Login berhasil');
         onSuccess?.();
-        navigate(redirectForRole(result.user.role_name));
+        goToRole(result.user.role_name);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login gagal');
@@ -94,7 +108,7 @@ export function useAuthFlow({ onSuccess, portal = 'customer' }: UseAuthFlowOptio
       const result = await verifyMfa(mfaToken, mfaCode);
       toast.success('Login berhasil');
       onSuccess?.();
-      navigate(redirectForRole(result.user.role_name));
+      goToRole(result.user.role_name);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Verifikasi MFA gagal');
     } finally {
@@ -110,7 +124,7 @@ export function useAuthFlow({ onSuccess, portal = 'customer' }: UseAuthFlowOptio
       const result = await completeMfaSetup(mfaToken, mfaCode.trim(), setupAnswers);
       toast.success('PIN Keamanan aktif & login berhasil');
       onSuccess?.();
-      navigate(redirectForRole(result.user.role_name));
+      goToRole(result.user.role_name);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal mengaktifkan PIN MFA');
     } finally {
@@ -124,9 +138,9 @@ export function useAuthFlow({ onSuccess, portal = 'customer' }: UseAuthFlowOptio
     setError('');
     try {
       const res = await apiClient.post<{
-        data: { username: string; role: string; has_pin: boolean; has_questions: boolean };
+        data: { min_password_length: number };
       }>('/auth/password/forgot/check', { username: forgotUsername.trim(), portal }, { skipAuth: true });
-      setForgotRole(res.data.role);
+      setMinResetLen(res.data.min_password_length || 8);
       setRecoveryMethod('pin');
       setRecoveryPin('');
       setRecoveryAnswers(['', '', '']);
@@ -187,7 +201,7 @@ export function useAuthFlow({ onSuccess, portal = 'customer' }: UseAuthFlowOptio
     setLoginForm,
     forgotUsername,
     setForgotUsername,
-    forgotRole,
+    minResetLen,
     recoveryMethod,
     setRecoveryMethod,
     recoveryPin,

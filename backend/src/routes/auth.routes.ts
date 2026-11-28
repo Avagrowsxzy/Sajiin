@@ -7,7 +7,6 @@ const router = Router();
 const controller = new AuthController();
 
 // Endpoint dengan rate limiting ketat (SECURITY.md & API.md)
-router.post('/register', authRateLimiter, (req, res, next) => controller.register(req, res, next));
 router.post('/login', authRateLimiter, (req, res, next) => controller.login(req, res, next));
 router.post('/mfa/verify', authRateLimiter, (req, res, next) => controller.verifyMfa(req, res, next));
 router.post('/refresh', authRateLimiter, (req, res, next) => controller.refresh(req, res, next));

@@ -4,7 +4,7 @@ import { env } from '../config/env.js';
 import { RequestContext, ROLE_NAMES, RoleId } from '../types/index.js';
 import { appPool } from '../config/database.js';
 import { writeAudit } from '../services/audit.service.js';
-import { verifyToken } from '../utils/crypto.js';
+import { verifyToken, passwordFingerprint } from '../utils/crypto.js';
 
 /* eslint-disable @typescript-eslint/no-namespace */
 // Extend Express Request interface
@@ -85,6 +85,10 @@ export interface TokenPayload {
   role: 'user' | 'admin' | 'kasir';
   username: string;
   type?: 'access' | 'mfa';
+  /** ID unik sesi MFA (mfa_token sekali pakai). */
+  jti?: string;
+  /** Sidik jari password saat token diterbitkan; guna mencabut access token lama setelah ganti sandi. */
+  pv?: string;
 }
 
 /**
@@ -117,7 +121,7 @@ export async function authenticate(
 
     // Verifikasi user masih aktif dan belum terkunci di database
     const [rows] = await appPool.query<mysql.RowDataPacket[]>(
-      'SELECT is_active, role_id, locked_until FROM users WHERE id = ?',
+      'SELECT is_active, role_id, locked_until, password_hash FROM users WHERE id = ?',
       [decoded.userId]
     );
 
@@ -132,6 +136,15 @@ export async function authenticate(
     if (userRow.locked_until && new Date(userRow.locked_until) > new Date()) {
       res.status(401).json({
         error: { code: 'UNAUTHORIZED', message: 'Akun terkunci sementara' },
+      });
+      return;
+    }
+
+    // Access token terikat pada versi password: token lama gugur setelah ganti/reset password (Finding N6).
+    // Token legacy tanpa `pv` tetap diterima demi kompatibilitas transisi (kedaluwarsa <= 15 menit).
+    if (decoded.pv && decoded.pv !== passwordFingerprint(userRow.password_hash)) {
+      res.status(401).json({
+        error: { code: 'UNAUTHORIZED', message: 'Token tidak valid' },
       });
       return;
     }

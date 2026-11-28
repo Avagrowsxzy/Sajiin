@@ -67,6 +67,9 @@ db/ssl/         sertifikat SSL MariaDB, tidak di-commit
    `PAYMENT_WEBHOOK_SECRET` (minimal 32 karakter, mis. `openssl rand -hex 32`)
    pada `.env` sendiri. Sesuaikan `CORS_ALLOWED_ORIGINS` bila frontend diakses
    dari origin lain, dan set `CORS_ALLOW_LAN_ORIGINS=true` hanya bila perlu akses LAN.
+   Registrasi publik (`POST /auth/register`) sudah dihapus total dan kepercayaan
+   header proxy mati secara default (`TRUST_PROXY` kosong); set `TRUST_PROXY`
+   hanya bila backend benar-benar berada di belakang reverse proxy tepercaya.
 
 3. Pasang dependency backend dan frontend:
 
@@ -117,8 +120,14 @@ Jangan menyimpan password akun di repository. Akun admin dibuat oleh proses
 setup lokal/seed. Password sementara harus dibaca dari konfigurasi lokal dan
 segera diganti saat login pertama.
 
-Akun pelanggan dibuat melalui alur pendaftaran aplikasi. Akun kasir dikelola
-oleh admin melalui aplikasi atau script setup lokal sesuai kebutuhan.
+Akun pelanggan dibuat oleh kasir/admin melalui halaman pelanggan (tidak ada
+pendaftaran mandiri publik). Akun kasir dikelola oleh admin melalui aplikasi
+atau script setup lokal sesuai kebutuhan.
+
+Portal login Kasir & Admin berada di entri build terpisah dan hanya dibuka
+lewat jalur rahasia yang diatur sisi server oleh `STAFF_LOGIN_PATH` (lihat
+`frontend/.env.example`). Jalur ini tidak ikut terkirim ke browser dan tidak
+dapat ditemukan dari bundel publik.
 
 ## Verifikasi
 
